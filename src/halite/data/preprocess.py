@@ -7,13 +7,13 @@ from halite.data.record import Record
 class ReadRawText:
     def __init__(self, key="text"):
         self.key = key
-    
+
     def __call__(self, iterator):
         for record in iterator:
-            features = record.data.decode('utf-8')
+            features = record.data.decode("utf-8")
             del record.data
             record[self.key] = features
-            
+
             yield record
 
 
@@ -27,16 +27,37 @@ class ParseFeatures:
             yield record
 
 
+class SelectFeatures:
+    def __init__(self, keys=("text",)):
+        self.keys = keys
+
+    def __call__(self, iterator):
+        for record in iterator:
+            for key in self.keys:
+                record[key] = record.data[key]
+
+            del record.data
+
+            yield record
+
+
 class Tokenize:
-    def __init__(self, tokenizer, keys=("text",), **tokenizer_kwargs):
+    def __init__(self, tokenizer, keys=("text",), output_keys=None, **tokenizer_kwargs):
         self.tokenizer = tokenizer
         self.keys = keys
+        self.output_keys = output_keys
+
+        if self.output_keys is not None:
+            assert len(self.output_keys) == len(self.keys)
+
         self.tokenizer_kwargs = tokenizer_kwargs
 
     def __call__(self, iterator):
         for features in iterator:
-            for key in self.keys:
-                features[key] = self.tokenizer.encode(
+            for i, key in enumerate(self.keys):
+                target_key = self.output_keys[i] if self.output_keys else key
+
+                features[target_key] = self.tokenizer.encode(
                     features[key], **self.tokenizer_kwargs
                 )
 
@@ -92,15 +113,16 @@ class SequencePacking:
 
 
 class AutoregressiveSample:
-    def __init__(self, key='text'):
+    def __init__(self, key="text"):
         self.key = key
-        
+
     def __call__(self, iterator):
         for record in iterator:
-            record['input'] = record[self.key][:-1]
-            record['target'] = record[self.key][1:]
-            
+            record["input"] = record[self.key][:-1]
+            record["target"] = record[self.key][1:]
+
             yield record
+
 
 class Collator:
     def __init__(self, keys=("text",)):
