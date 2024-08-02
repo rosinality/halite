@@ -29,7 +29,9 @@ class TransformerEncoderBlock(nn.Module):
             use_cache,
             unpad_params,
         )
+        print(out)
         out = self.ff(out)
+        # print(out)
 
         rest = None
         if isinstance(out, tuple):
@@ -95,6 +97,8 @@ class NGPTBlock(nn.Module):
         rest = None
         if isinstance(out, tuple):
             out, *rest = out
+
+        import torch
 
         if self.post_norm is not None:
             out = self.post_norm(out)
