@@ -7,16 +7,15 @@ from halite.data import preprocess
 from halite.nn.loss import CrossEntropyLoss
 from halite.optim import lr_scheduler
 from halite.transformers.parallelize import parallelize
-from halite.transformers.optimizer import ngpt_normalize
 from halite.data.tokenizers.sentencepiece import SentencePieceTokenizer
 
 from ..data.dclm_samples import conf as data_conf
-from ..models.ngpt import ngpt
+from ..models.scaling.base import transformer
 
 conf = field()
 
 lr = 1e-3
-weight_decay = 0
+weight_decay = 0.1
 n_vocab = 32000
 tokenizer_path = "/mnt/naplm/seonghyeon/llama2-tokenizer.model"
 max_length = 2048
@@ -24,14 +23,15 @@ max_length = 2048
 tokenizer = SentencePieceTokenizer(tokenizer_path)
 
 conf.model = field(
-    model=call[ngpt](
+    model=call[transformer](
         vocab_size=n_vocab,
         dim=1024,
         n_head=8,
         n_layer=23,
-        intermediate_size=call[int](1024 * 3.5),
+        intermediate_size=call[int](1024 * 3.5 * 2),
         max_position_embeddings=max_length,
-        softcap=50.0,
+        softcap=0,
+        post_norm=False,
         attention_processor="torch",
     ),
     wrapper=partial(
@@ -41,7 +41,7 @@ conf.model = field(
         tensor_parallel_config={"enable_async_tp": True},
         activation_checkpointing=True,
         activation_checkpointing_config={"mode": "full", "selective": "op"},
-        compile=False,
+        compile=True,
     ),
 )
 
@@ -68,13 +68,11 @@ conf.training = field(
     scheduler=partial(
         lr_scheduler.cycle_scheduler,
         lr=lr,
-        initial_multiplier=0,
-        warmup=1,
+        initial_multiplier=1e-6,
+        warmup=5000,
         decay=("linear", "cos"),
     ),
     criterion=CrossEntropyLoss(z_loss=1e-4, fast=True),
-    model_initializer=partial(ngpt_normalize),
-    postprocess=partial(ngpt_normalize),
     weight_decay=weight_decay,
     clip_grad_norm=1.0,
     n_epochs=1,

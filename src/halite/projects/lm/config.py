@@ -31,6 +31,7 @@ class Training(Config):
     optimizer: Instance
     scheduler: Instance
     criterion: Instance | None = None
+    model_initializer: Instance | None = None
     postprocess: Instance | None = None
     weight_decay: float = 0.0
     clip_grad_norm: float | None = None

@@ -38,6 +38,10 @@ def train(
 ):
     is_train = model.training
     model.train()
+    
+    if conf.training.model_initializer is not None:
+        initializer = instantiate(conf.training.model_initializer)
+        initializer(model)
 
     postprocess = None
     if conf.training.postprocess is not None:
@@ -63,6 +67,9 @@ def train(
 
         if out.aux_outputs is not None:
             for aux_out in out.aux_outputs:
+                if aux_out is None:
+                    continue
+
                 for aux_key, aux_val in aux_out.items():
                     if aux_key not in loss_dict:
                         loss_dict[aux_key] = aux_val.detach()
@@ -157,6 +164,9 @@ def evaluate(conf, model, criterion, eval_loader, device, parallel_dims, logger)
 
         if out.aux_outputs is not None:
             for aux_out in out.aux_outputs:
+                if aux_out is None:
+                    continue
+
                 for aux_key, aux_val in aux_out.items():
                     if aux_key not in loss_dict:
                         loss_dict[aux_key] = aux_val.detach()
@@ -356,3 +366,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+    torch.distributed.destroy_process_group()
