@@ -61,7 +61,7 @@ def ngpt(
             ),
             post_norm=l2norm,
             skip_norm=l2norm,
-            scale=Scale(dim, 1 / n_layer, 1 / (dim**0.5)),
+            scale=Scale(dim, 1 / n_layer, 1 / (dim**0.5), apply_abs=True),
         ),
         NGPTBlock(
             GatedFeedForward(
@@ -85,7 +85,7 @@ def ngpt(
             ),
             post_norm=l2norm,
             skip_norm=l2norm,
-            scale=Scale(dim, 1 / n_layer, 1 / (dim**0.5)),
+            scale=Scale(dim, 1 / n_layer, 1 / (dim**0.5), apply_abs=True),
         ),
     )
 
