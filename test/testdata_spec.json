@@ -1,0 +1,15 @@
+{
+    "root": "testdata",
+    "ratios": {
+        "dataset_a": 0.8,
+        "dataset_b": 0.2
+    },
+    "shards": {
+        "dataset_a": {
+            "data-1-of-1.arrayrecord": 1000
+        },
+        "dataset_b": {
+            "data-1-of-1.arrayrecord": 1000
+        }
+    }
+}
