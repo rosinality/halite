@@ -2,7 +2,6 @@ from copy import deepcopy
 from functools import partial
 
 from slickconf import field, config_fn, call
-import torch
 from torch import nn
 
 from halite.nn.activation import SwiGLU
@@ -22,35 +21,56 @@ from halite.transformers.transformer import (
     TransformerDecoder,
 )
 
+try:
+    from halite.transformers.infer.attention import (
+        InferSelfAttention,
+        FlashInferAttention,
+    )
+
+except ImportError:
+    pass
+
 
 @config_fn
-def transformer(
-    vocab_size,
+def build_block(
+    layer_id,
     dim,
     n_head,
     n_layer,
     intermediate_size,
-    max_position_embeddings,
+    n_key_value_head=None,
     softcap=0.0,
     rms_norm_epsilon=1e-6,
     post_norm=False,
-    attention_processor="native",
+    pos_embed_apply_fn=None,
+    attention_processor="auto",
     qkv_split=False,
     gated_ff_split=False,
+    fast_norm=False,
+    infer: str | None = None,
 ):
-    blocks = []
+    head_dim = dim // n_head
 
-    fast_norm = attention_processor == "flash_attn"
+    if infer == "flashinfer":
+        attention = FlashInferAttention(
+            layer_id,
+            n_head,
+            head_dim,
+            apply_pos_emb_fn=pos_embed_apply_fn,
+        )
 
-    attention = Attention(
-        n_head,
-        dim // n_head,
-        attn_drop=0,
-        apply_pos_emb_fn=partial(apply_rotary_emb),
-        processor=attention_processor,
-        softcap=softcap,
-        is_causal=True,
-    )
+    else:
+        attention = Attention(
+            n_head,
+            head_dim,
+            n_key_value_head=n_key_value_head,
+            attn_drop=0,
+            apply_pos_emb_fn=pos_embed_apply_fn,
+            processor=attention_processor,
+            softcap=softcap,
+            is_causal=True,
+        )
+
     rmsnorm = RMSNorm(dim, eps=rms_norm_epsilon, fast=fast_norm)
     rmsnorm_post = RMSNorm(
         dim,
@@ -59,11 +79,14 @@ def transformer(
         fast=fast_norm,
     )
 
+    if n_key_value_head is None:
+        n_key_value_head = n_head
+
     if qkv_split:
         self_attention = SelfAttentionQKV(
-            q=nn.Linear(dim, dim, bias=False),
-            k=nn.Linear(dim, dim, bias=False),
-            v=nn.Linear(dim, dim, bias=False),
+            q=nn.Linear(dim, head_dim * n_head, bias=False),
+            k=nn.Linear(dim, head_dim * n_key_value_head, bias=False),
+            v=nn.Linear(dim, head_dim * n_key_value_head, bias=False),
             attention=attention,
             out=nn.Linear(dim, dim, bias=False),
             q_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
@@ -73,14 +96,29 @@ def transformer(
         )
 
     else:
-        self_attention = SelfAttention(
-            qkv=nn.Linear(dim, dim * 3, bias=False),
-            attention=attention,
-            out=nn.Linear(dim, dim, bias=False),
-            qkv_split="llama",
-            qkv_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
-            out_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
-        )
+        if infer == "flashinfer":
+            self_attention = InferSelfAttention(
+                qkv=nn.Linear(
+                    dim, head_dim * (n_head + n_key_value_head * 2), bias=False
+                ),
+                attention=attention,
+                out=nn.Linear(dim, dim, bias=False),
+                qkv_split="llama",
+                qkv_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
+                out_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
+            )
+
+        else:
+            self_attention = SelfAttention(
+                qkv=nn.Linear(
+                    dim, head_dim * (n_head + n_key_value_head * 2), bias=False
+                ),
+                attention=attention,
+                out=nn.Linear(dim, dim, bias=False),
+                qkv_split="llama",
+                qkv_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
+                out_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
+            )
 
     if gated_ff_split:
         ff = GatedFeedForward(
@@ -115,8 +153,58 @@ def transformer(
         ),
     )
 
-    for _ in range(n_layer):
-        blocks += [deepcopy(block)]
+    return block
+
+
+@config_fn
+def transformer(
+    vocab_size,
+    dim,
+    n_head,
+    n_layer,
+    intermediate_size,
+    max_position_embeddings,
+    n_key_value_head=None,
+    pos_embed=None,
+    pos_embed_apply_fn=None,
+    softcap=0.0,
+    rms_norm_epsilon=1e-6,
+    post_norm=False,
+    attention_processor="auto",
+    qkv_split=False,
+    gated_ff_split=False,
+    infer: str | None = None,
+):
+    blocks = []
+
+    fast_norm = attention_processor == "flash_attn"
+
+    if pos_embed is None:
+        pos_embed = RotaryEmbedding(dim // n_head, max_position_embeddings)
+
+    if pos_embed_apply_fn is None:
+        pos_embed_apply_fn = partial(apply_rotary_emb)
+
+    for i in range(n_layer):
+        blocks += [
+            call[build_block](
+                i,
+                dim,
+                n_head,
+                n_layer,
+                intermediate_size,
+                n_key_value_head,
+                softcap,
+                rms_norm_epsilon,
+                post_norm,
+                pos_embed_apply_fn,
+                attention_processor,
+                qkv_split,
+                gated_ff_split,
+                fast_norm,
+                infer=infer,
+            )
+        ]
 
     transformer_config = TransformerConfig(
         dim=dim,
@@ -133,9 +221,8 @@ def transformer(
             nn.Embedding(vocab_size, dim),
             0,
             embed_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
-            multiplier=dim**0.5,
         ),
-        pos_embed=RotaryEmbedding(dim // n_head, max_position_embeddings),
+        pos_embed=pos_embed,
         blocks=blocks,
         post_blocks=SequenceParallelWrapper(
             RMSNorm(dim, eps=rms_norm_epsilon, fast=fast_norm)

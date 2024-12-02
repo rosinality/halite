@@ -143,9 +143,11 @@ class GatedFeedForward(nn.Module):
         init_weights(self.linear_out, self.linear_out_init)
 
     def forward(self, input):
-        out = self.linear_proj(input)
-        out = out * self.activation(self.linear_gate(input))
+        proj = self.linear_proj(input)
+        gate = self.activation(self.linear_gate(input))
+        out = proj * gate
         out = self.dropout(out)
+
         out = self.linear_out(out)
 
         return out

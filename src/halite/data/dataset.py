@@ -69,6 +69,40 @@ def build_dataset_from_spec(spec, split="train", split_ratio=0):
     return datasets, ratios, names
 
 
+class MapDataset(data.Dataset):
+    def __init__(self, datasets, names=None, operations=None):
+        self.datasets = datasets
+        self.names = names
+        self.points = torch.cumsum(torch.tensor([len(d) for d in datasets]), 0).tolist()
+        self.operations = [] if operations is None else operations
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        dataset_idx = bisect.bisect_right(self.points, idx)
+        dataset = self.datasets[dataset_idx]
+
+        if dataset_idx == 0:
+            sample_idx = idx
+
+        else:
+            sample_idx = idx - self.points[dataset_idx - 1]
+
+        record = Record(
+            data=dataset[sample_idx % len(dataset)],
+            _meta_={
+                "dataset_id": dataset_idx,
+                "sample_id": sample_idx,
+                "dataset_name": self.names[dataset_idx]
+                if self.names is not None
+                else None,
+            },
+        )
+
+        return record
+
+
 class WeightedIterableDataset(data.IterableDataset):
     def __init__(
         self,
@@ -140,7 +174,13 @@ class WeightedIterableDataset(data.IterableDataset):
 
         record = Record(
             data=dataset[sample_idx % len(dataset)],
-            _meta_={"dataset_id": dataset_idx, "sample_id": sample_idx},
+            _meta_={
+                "dataset_id": dataset_idx,
+                "sample_id": sample_idx,
+                "dataset_name": self.names[dataset_idx]
+                if self.names is not None
+                else None,
+            },
         )
 
         return record

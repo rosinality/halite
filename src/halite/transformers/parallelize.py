@@ -6,7 +6,7 @@ from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
 )
 from torch.distributed.tensor.parallel import parallelize_module
 
-from halite.parallel.fsdp import apply_fsdp
+from halite.parallel.fsdp import apply_ddp, apply_fsdp
 
 
 def parallelize(
@@ -29,7 +29,7 @@ def parallelize(
     if compile:
         apply_compile(model)
 
-    if parallel_dims.dp_mesh_enabled:
+    if parallel_dims.dp_shard_enabled:
         if parallel_dims.dp_replicate_enabled:
             dp_mesh = mesh["dp_replicate", "dp_shard"]
 
@@ -37,6 +37,9 @@ def parallelize(
             dp_mesh = mesh["dp"]
 
         apply_fsdp(model, dp_mesh, param_dtype, reduce_dtype)
+
+    elif parallel_dims.dp_replicate_enabled:
+        apply_ddp(model, mesh["dp"], compile=compile)
 
     return model
 

@@ -128,7 +128,7 @@ class NormalizedLinear(nn.Linear):
 
 
 class Scale(nn.Module):
-    def __init__(self, dim, init, scale, rescale=None):
+    def __init__(self, dim, init, scale, rescale=None, apply_abs=False):
         super().__init__()
 
         self.weight = nn.Parameter(
@@ -137,12 +137,26 @@ class Scale(nn.Module):
         self.init = init
         self.scale = scale
         self.rescale = rescale
+        self.apply_abs = apply_abs
+        
+    def init_weights(self):
+        nn.init.constant_(self.weight, self.scale)
 
     def forward(self, input):
         if self.rescale is None:
-            return input * (self.init / self.scale * self.weight)
+            scale = (self.init / self.scale * self.weight)
+            
+            if self.apply_abs:
+                scale = torch.abs(scale)
+            
+            return input * scale
 
-        return input * (self.init / self.scale * self.rescale * self.weight)
+        scale = (self.init / self.scale * self.rescale * self.weight)
+
+        if self.apply_abs:
+            scale = torch.abs(scale)
+
+        return input * scale
 
 
 class L2Norm(nn.Module):
@@ -153,4 +167,7 @@ class L2Norm(nn.Module):
         self.eps = eps
 
     def forward(self, input):
-        return F.normalize(input, dim=self.dim, p=2, eps=self.eps)
+        # return F.normalize(input, dim=self.dim, p=2, eps=self.eps)
+        out = input / input.norm(p=2, dim=self.dim, keepdim=True)
+
+        return out

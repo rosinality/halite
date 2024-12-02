@@ -118,7 +118,8 @@ class SelfAttention(nn.Module):
         self.head_dim = attention.head_dim
 
         self.n_key_value_head = attention.n_head
-        if attention.n_key_value_head > 0:
+
+        if attention.n_key_value_head is not None:
             self.n_key_value_head = attention.n_key_value_head
 
         self.qkv_out_dim = self.head_dim * (self.n_head + self.n_key_value_head * 2)
@@ -302,7 +303,7 @@ class Attention(nn.Module):
         self,
         n_head,
         head_dim,
-        n_key_value_head=0,
+        n_key_value_head=None,
         attn_drop=0,
         is_causal=False,
         apply_pos_emb_fn=None,
@@ -355,7 +356,7 @@ class Attention(nn.Module):
         value = value.view(batch, key_length, -1, self.head_dim)
 
         if self.apply_pos_emb_fn is not None:
-            query, key = self.apply_pos_emb_fn(query, key, pos_embed)
+            query, key = self.apply_pos_emb_fn(query, key, pos_embed, use_fp32=True)
 
         out, next_cache = self.attention(
             query,
@@ -496,7 +497,13 @@ class Attention(nn.Module):
 
         # batch, n_head, query_length, dim
         out = F.scaled_dot_product_attention(
-            query, key, value, attention_mask, dropout, is_causal=is_causal
+            query,
+            key,
+            value,
+            attention_mask,
+            dropout,
+            is_causal=is_causal,
+            enable_gqa=self.n_key_value_head is not None,
         )
 
         return out, next_cache
@@ -512,7 +519,7 @@ class Attention(nn.Module):
         batch, query_length, n_head, dim = query.shape
         key_length = key.shape[1]
 
-        if self.n_key_value_head > 0:
+        if self.n_key_value_head is not None:
             query = query.permute(0, 2, 1, 3).reshape(batch, n_head * query_length, dim)
             key = key.permute(0, 3, 1, 2).reshape(batch, dim, key_length)
 
@@ -611,28 +618,23 @@ class DiffAttention(nn.Module):
         if isinstance(normalize, bool) and normalize:
             self.normalize = 1 / (head_dim**0.5)
 
-        self._lambda_init = lambda_init
         self.register_buffer(
             "lambda_init",
             torch.as_tensor(lambda_init, dtype=torch.float32),
             persistent=True,
         )
         self.lambda_q1 = nn.Parameter(torch.empty(self.head_dim))
-        self.lambda_k1 = nn.Parameter(torch.zeros(self.head_dim))
-        self.lambda_q2 = nn.Parameter(torch.zeros(self.head_dim))
-        self.lambda_k2 = nn.Parameter(torch.zeros(self.head_dim))
+        self.lambda_k1 = nn.Parameter(torch.empty(self.head_dim))
+        self.lambda_q2 = nn.Parameter(torch.empty(self.head_dim))
+        self.lambda_k2 = nn.Parameter(torch.empty(self.head_dim))
 
         self.sub_norm = sub_norm
-
-    def extra_repr(self):
-        return f"lambda_init={self.lambda_init}"
 
     def init_weights(self):
         nn.init.normal_(self.lambda_q1, mean=0, std=0.1)
         nn.init.normal_(self.lambda_k1, mean=0, std=0.1)
         nn.init.normal_(self.lambda_q2, mean=0, std=0.1)
         nn.init.normal_(self.lambda_k2, mean=0, std=0.1)
-        self.lambda_init.copy_(torch.tensor(self._lambda_init))
 
     def forward(
         self,
