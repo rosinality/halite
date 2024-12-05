@@ -12,10 +12,10 @@ conf = field()
 dim = 3072
 n_head = 24
 initial_max_position_embeddings = 8192
-use_complex_rope = False
+use_complex_rope = True
 qkv_split = True
 
-model_config = field(
+transformer_config = field(
     vocab_size=128256,
     dim=dim,
     n_head=n_head,
@@ -35,10 +35,10 @@ model_config = field(
     gated_ff_split=qkv_split,
 )
 
-conf.model = call[transformer](**model_config)
+conf.model = call[transformer](**transformer_config)
+conf.model_infer = call[transformer](**transformer_config, infer="flashinfer")
 
-conf.model_config = model_config
-conf.model_config.use_complex_rope = use_complex_rope
+conf.model_config = field(**transformer_config, use_complex_rope=use_complex_rope)
 
 conf.policy = field(
     weight_maps=weight_maps,

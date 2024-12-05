@@ -1,7 +1,7 @@
 from copy import deepcopy
 from functools import partial
 
-from slickconf import field, config_fn, call
+from slickconf import field, config_fn, call, select
 from torch import nn
 
 from halite.nn.activation import SwiGLU
@@ -21,9 +21,13 @@ from halite.transformers.transformer import (
     TransformerDecoder,
 )
 
+from halite.transformers.infer.transformer import InferTransformerDecoder
+from halite.transformers.infer.block import InferTransformerEncoderBlock
+
 try:
     from halite.transformers.infer.attention import (
         InferSelfAttention,
+        InferSelfAttentionQKV,
         FlashInferAttention,
     )
 
@@ -56,6 +60,7 @@ def build_block(
             layer_id,
             n_head,
             head_dim,
+            n_key_value_head=n_key_value_head,
             apply_pos_emb_fn=pos_embed_apply_fn,
         )
 
@@ -83,7 +88,11 @@ def build_block(
         n_key_value_head = n_head
 
     if qkv_split:
-        self_attention = SelfAttentionQKV(
+        self_attention_class = (
+            InferSelfAttentionQKV if infer == "flashinfer" else SelfAttentionQKV
+        )
+
+        self_attention = self_attention_class(
             q=nn.Linear(dim, head_dim * n_head, bias=False),
             k=nn.Linear(dim, head_dim * n_key_value_head, bias=False),
             v=nn.Linear(dim, head_dim * n_key_value_head, bias=False),
@@ -96,29 +105,18 @@ def build_block(
         )
 
     else:
-        if infer == "flashinfer":
-            self_attention = InferSelfAttention(
-                qkv=nn.Linear(
-                    dim, head_dim * (n_head + n_key_value_head * 2), bias=False
-                ),
-                attention=attention,
-                out=nn.Linear(dim, dim, bias=False),
-                qkv_split="llama",
-                qkv_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
-                out_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
-            )
+        self_attention_class = (
+            InferSelfAttention if infer == "flashinfer" else SelfAttention
+        )
 
-        else:
-            self_attention = SelfAttention(
-                qkv=nn.Linear(
-                    dim, head_dim * (n_head + n_key_value_head * 2), bias=False
-                ),
-                attention=attention,
-                out=nn.Linear(dim, dim, bias=False),
-                qkv_split="llama",
-                qkv_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
-                out_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
-            )
+        self_attention = self_attention_class(
+            qkv=nn.Linear(dim, head_dim * (n_head + n_key_value_head * 2), bias=False),
+            attention=attention,
+            out=nn.Linear(dim, dim, bias=False),
+            qkv_split="llama",
+            qkv_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
+            out_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
+        )
 
     if gated_ff_split:
         ff = GatedFeedForward(
@@ -140,7 +138,13 @@ def build_block(
             linear2_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
         )
 
-    block = TransformerEncoderBlock(
+    if infer is not None:
+        block_class = InferTransformerEncoderBlock
+
+    else:
+        block_class = TransformerEncoderBlock
+
+    block = block_class(
         ResidualBlock(
             deepcopy(rmsnorm),
             self_attention,
@@ -216,7 +220,13 @@ def transformer(
         vocab_size=vocab_size,
     )
 
-    transformer = TransformerDecoder(
+    if infer is not None:
+        transformer_class = InferTransformerDecoder
+
+    else:
+        transformer_class = TransformerDecoder
+
+    transformer = transformer_class(
         embedding=TextEmbedding(
             nn.Embedding(vocab_size, dim),
             0,
@@ -238,6 +248,3 @@ def transformer(
     )
 
     return transformer
-
-
-conf = field(model=call[transformer](32000, 96, 4, 3, call[int](96 * 3.5), 2048, 1e-6))

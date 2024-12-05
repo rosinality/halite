@@ -237,7 +237,7 @@ class SelfAttentionQKV(nn.Module):
         self.n_key_value_head = self.n_head
         self.qkv_out_dim = self.head_dim * (self.n_head + self.n_key_value_head * 2)
 
-        if attention.n_key_value_head > 0:
+        if attention.n_key_value_head is not None:
             self.n_key_value_head = attention.n_key_value_head
 
         self.q_init = q_init

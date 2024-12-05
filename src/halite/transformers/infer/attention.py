@@ -10,7 +10,7 @@ from flashinfer import (
     BatchDecodeWithPagedKVCacheWrapper,
 )
 
-from halite.transformers.attention import SelfAttention
+from halite.transformers.attention import SelfAttention, SelfAttentionQKV
 from halite.transformers.infer.engine.batch import Batch, ForwardMode
 from halite.transformers.infer.engine.memory_pool import RequestToTokenPool
 
@@ -194,13 +194,22 @@ class InferSelfAttention(SelfAttention):
         return out
 
 
+class InferSelfAttentionQKV(SelfAttentionQKV):
+    def forward(self, input, batch, pos_emb=None):
+        q, k, v = self.q(input), self.k(input), self.v(input)
+        out = self.attention(q, k, v, batch, pos_emb)
+        out = self.out(out)
+
+        return out
+
+
 class FlashInferAttention(nn.Module):
     def __init__(
         self,
         layer_id: int,
         n_head: int,
         head_dim: int,
-        n_key_value_head: int = 0,
+        n_key_value_head: int | None = None,
         apply_pos_emb_fn: Callable = None,
     ):
         super().__init__()
@@ -209,7 +218,10 @@ class FlashInferAttention(nn.Module):
 
         self.n_head = n_head
         self.head_dim = head_dim
-        self.n_key_value_head = n_key_value_head
+        self.n_key_value_head = n_head
+
+        if n_key_value_head is not None:
+            self.n_key_value_head = n_key_value_head
 
         self.apply_pos_emb_fn = apply_pos_emb_fn
 

@@ -1,3 +1,5 @@
+import torch
+
 from halite.transformers.transformer import TransformerDecoder
 from halite.transformers.infer.postprocessor import LogitsProcessor
 
@@ -33,6 +35,7 @@ class InferTransformerDecoder(TransformerDecoder):
 
         self.logits_processor = LogitsProcessor()
 
+    @torch.inference_mode()
     def forward(self, batch):
         out = self.embedding(input_ids=batch.input_ids)
 
@@ -59,10 +62,9 @@ class InferTransformerDecoder(TransformerDecoder):
             if not self.pos_embed_layer_shared:
                 pos_emb = self.get_pos_embed(self.pos_embeds[index], attention_mask)
 
-            out, residual, _, _ = block(
+            out, residual, _ = block(
                 out,
-                residual,
-                attention_mask,
+                batch,
                 pos_emb=pos_emb,
             )
 

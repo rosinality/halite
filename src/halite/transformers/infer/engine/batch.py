@@ -4,8 +4,8 @@ from typing import Any
 
 import torch
 
-from halite.transformers.infer.memory_pool import RequestToTokenPool, KVPool
-from halite.transformers.infer.radix_cache import RadixCache
+from halite.transformers.infer.engine.memory_pool import RequestToTokenPool, KVPool
+from halite.transformers.infer.engine.radix_cache import RadixCache
 
 
 class ForwardMode(IntEnum):
@@ -45,7 +45,12 @@ class SamplingParams:
         if self.top_k == -1:
             self.top_k = 1 << 30
 
+        self.normalized = False
+
     def normalize(self, tokenizer):
+        if self.normalized:
+            return
+
         if self.stop_strs is None:
             self.stop_strs = []
             self.stop_str_max_len = 0
@@ -64,6 +69,8 @@ class SamplingParams:
                     stop_str_max_len = max(stop_str_max_len, len(stop_str))
 
             self.stop_str_max_len = stop_str_max_len
+
+        self.normalized = True
 
 
 @dataclass
@@ -158,6 +165,9 @@ class Request:
         self.input_top_logprobs = None
         self.output_logprobs = []
         self.output_top_logprobs = []
+
+    def normalize_sampling_params(self, tokenizer):
+        self.sampling_params.normalize(tokenizer)
 
     def finished(self):
         return self.finished_reason is not None
