@@ -21,6 +21,10 @@ class InferenceEngine:
 
         self.scheduler = Scheduler(self.model_runner, tokenizer, server_config)
 
+        self.model_config = model_config
+        self.server_config = server_config
+        self.tokenizer = tokenizer
+
     def infer_batch(self, requests):
         requests = self.scheduler.build_batch_request(requests)
 

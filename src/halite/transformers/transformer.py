@@ -11,6 +11,7 @@ from halite.transformers.cache_manager import (
     AllocatedCacheManager,
     BasicCacheManager,
 )
+from halite.transformers.container import ModuleDict
 from halite.transformers.generation import GenerationMixin
 from halite.transformers.model import ModelMixin
 
@@ -71,7 +72,7 @@ class TransformerDecoder(nn.Module, GenerationMixin, ModelMixin):
             for _ in range(len(blocks)):
                 self.pos_embeds.append(pos_embed())
 
-        self.blocks = nn.ModuleDict()
+        self.blocks = ModuleDict()
         for i, block in enumerate(blocks):
             self.blocks[str(i)] = block
 

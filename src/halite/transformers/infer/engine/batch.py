@@ -199,7 +199,7 @@ class Request:
             self.finished_reason = FinishReason("stop", matched=last_token_id)
 
         if len(self.sampling_params.stop_strs) > 0:
-            tail_str = self.tokenizer.decode(
+            tail_str = tokenizer.decode(
                 self.output_ids[-(self.sampling_params.stop_str_max_len + 1) :]
             )
 
@@ -426,9 +426,12 @@ class Batch:
         )
         self.seq_lens = torch.cat((self.seq_lens, other.seq_lens))
         self.seq_lens_sum += other.seq_lens_sum
+        self.kv_pool_ids = None
 
         if self.output_ids is not None:
             self.output_ids = torch.cat((self.output_ids, other.output_ids))
+
+        self.requests.extend(other.requests)
 
     def check_decode_memory(self):
         batch_size = len(self.requests)

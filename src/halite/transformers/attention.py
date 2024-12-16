@@ -114,15 +114,15 @@ class SelfAttention(nn.Module):
         self.attention = attention
         self.out = out
 
-        self.n_head = attention.n_head
+        self.n_heads = attention.n_heads
         self.head_dim = attention.head_dim
 
-        self.n_key_value_head = attention.n_head
+        self.n_key_value_heads = attention.n_heads
 
-        if attention.n_key_value_head is not None:
-            self.n_key_value_head = attention.n_key_value_head
+        if attention.n_key_value_heads is not None:
+            self.n_key_value_heads = attention.n_key_value_heads
 
-        self.qkv_out_dim = self.head_dim * (self.n_head + self.n_key_value_head * 2)
+        self.qkv_out_dim = self.head_dim * (self.n_heads + self.n_key_value_heads * 2)
 
         self.qkv_split = {"megatron": self.qkv_megatron, "llama": self.qkv_llama}.get(
             qkv_split
@@ -138,12 +138,12 @@ class SelfAttention(nn.Module):
         qkv = qkv.reshape(
             qkv.shape[0],
             qkv.shape[1],
-            self.n_key_value_head,
-            (self.n_head // self.n_key_value_head + 2) * self.head_dim,
+            self.n_key_value_heads,
+            (self.n_heads // self.n_key_value_heads + 2) * self.head_dim,
         )
         q, k, v = qkv.split(
             (
-                self.n_head // self.n_key_value_head * self.head_dim,
+                self.n_heads // self.n_key_value_heads * self.head_dim,
                 self.head_dim,
                 self.head_dim,
             ),
@@ -157,9 +157,9 @@ class SelfAttention(nn.Module):
 
         q, k, v = qkv.split(
             (
-                self.n_head * self.head_dim // tp,
-                self.n_key_value_head * self.head_dim // tp,
-                self.n_key_value_head * self.head_dim // tp,
+                self.n_heads * self.head_dim // tp,
+                self.n_key_value_heads * self.head_dim // tp,
+                self.n_key_value_heads * self.head_dim // tp,
             ),
             -1,
         )
@@ -232,13 +232,13 @@ class SelfAttentionQKV(nn.Module):
         self.out = out
         self.scaler = scaler
 
-        self.n_head = attention.n_head
+        self.n_heads = attention.n_heads
         self.head_dim = attention.head_dim
-        self.n_key_value_head = self.n_head
-        self.qkv_out_dim = self.head_dim * (self.n_head + self.n_key_value_head * 2)
+        self.n_key_value_heads = self.n_heads
+        self.qkv_out_dim = self.head_dim * (self.n_heads + self.n_key_value_heads * 2)
 
-        if attention.n_key_value_head is not None:
-            self.n_key_value_head = attention.n_key_value_head
+        if attention.n_key_value_heads is not None:
+            self.n_key_value_heads = attention.n_key_value_heads
 
         self.q_init = q_init
         self.k_init = k_init
@@ -301,9 +301,9 @@ class SelfAttentionQKV(nn.Module):
 class Attention(nn.Module):
     def __init__(
         self,
-        n_head,
+        n_heads,
         head_dim,
-        n_key_value_head=None,
+        n_key_value_heads=None,
         attn_drop=0,
         is_causal=False,
         apply_pos_emb_fn=None,
@@ -314,7 +314,7 @@ class Attention(nn.Module):
     ):
         super().__init__()
 
-        self.n_head = n_head
+        self.n_heads = n_heads
         self.head_dim = head_dim
 
         self.attention_kwargs = processor_kwargs
@@ -325,7 +325,7 @@ class Attention(nn.Module):
 
         self.use_flash_attn = processor == "flash_attn"
 
-        self.n_key_value_head = n_key_value_head
+        self.n_key_value_heads = n_key_value_heads
         self.attn_drop_p = attn_drop
         self.attn_drop = nn.Dropout(attn_drop)
         self.is_causal = is_causal
@@ -503,7 +503,7 @@ class Attention(nn.Module):
             attention_mask,
             dropout,
             is_causal=is_causal,
-            enable_gqa=self.n_key_value_head is not None,
+            enable_gqa=self.n_key_value_heads is not None,
         )
 
         return out, next_cache
@@ -519,7 +519,7 @@ class Attention(nn.Module):
         batch, query_length, n_head, dim = query.shape
         key_length = key.shape[1]
 
-        if self.n_key_value_head is not None:
+        if self.n_key_value_heads is not None:
             query = query.permute(0, 2, 1, 3).reshape(batch, n_head * query_length, dim)
             key = key.permute(0, 3, 1, 2).reshape(batch, dim, key_length)
 
@@ -581,11 +581,11 @@ class Attention(nn.Module):
 class DiffAttention(nn.Module):
     def __init__(
         self,
-        n_head,
+        n_heads,
         head_dim,
         lambda_init,
         sub_norm,
-        n_key_value_head=0,
+        n_key_value_heads=0,
         attn_drop=0,
         is_causal=False,
         apply_pos_emb_fn=None,
@@ -596,7 +596,7 @@ class DiffAttention(nn.Module):
     ):
         super().__init__()
 
-        self.n_head = n_head * 2
+        self.n_heads = n_heads * 2
         self.head_dim = head_dim
 
         self.attention_kwargs = processor_kwargs
@@ -607,7 +607,7 @@ class DiffAttention(nn.Module):
 
         self.use_flash_attn = processor == "flash_attn"
 
-        self.n_key_value_head = n_key_value_head
+        self.n_key_value_heads = n_key_value_heads
         self.attn_drop_p = attn_drop
         self.attn_drop = nn.Dropout(attn_drop)
         self.is_causal = is_causal
@@ -789,9 +789,9 @@ class DiffAttention(nn.Module):
         key_length = key.shape[1]
 
         query = query.view(
-            batch, query_length, self.n_head // 2, 2, self.head_dim
+            batch, query_length, self.n_heads // 2, 2, self.head_dim
         ).permute(0, 2, 3, 1, 4)  # batch, n_head, 2, query_length, dim
-        key = key.view(batch, key_length, self.n_head // 2, 2, self.head_dim).permute(
+        key = key.view(batch, key_length, self.n_heads // 2, 2, self.head_dim).permute(
             0, 2, 3, 1, 4
         )  # batch, n_head, 2, key_length, dim
         value = value.permute(0, 2, 1, 3)  # batch, n_head, key_length, dim
@@ -838,7 +838,7 @@ class DiffAttention(nn.Module):
         batch, query_length, n_head, dim = query.shape
         key_length = key.shape[1]
 
-        if self.n_key_value_head > 0:
+        if self.n_key_value_heads > 0:
             query = query.permute(0, 2, 1, 3).reshape(batch, n_head * query_length, dim)
             key = key.permute(0, 3, 1, 2).reshape(batch, dim, key_length)
 

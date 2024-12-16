@@ -16,10 +16,7 @@ from halite.transformers.feedforward import (
     SequenceParallelWrapper,
 )
 from halite.transformers.position import RotaryEmbedding, apply_rotary_emb
-from halite.transformers.transformer import (
-    TransformerConfig,
-    TransformerDecoder,
-)
+from halite.transformers.transformer import TransformerDecoder
 
 from halite.transformers.infer.transformer import InferTransformerDecoder
 from halite.transformers.infer.block import InferTransformerEncoderBlock
@@ -39,10 +36,11 @@ except ImportError:
 def build_block(
     layer_id,
     dim,
-    n_head,
-    n_layer,
+    n_heads,
+    head_dim,
+    n_layers,
     intermediate_size,
-    n_key_value_head=None,
+    n_key_value_heads=None,
     softcap=0.0,
     rms_norm_epsilon=1e-6,
     post_norm=False,
@@ -53,22 +51,20 @@ def build_block(
     fast_norm=False,
     infer: str | None = None,
 ):
-    head_dim = dim // n_head
-
     if infer == "flashinfer":
         attention = FlashInferAttention(
             layer_id,
-            n_head,
+            n_heads,
             head_dim,
-            n_key_value_head=n_key_value_head,
+            n_key_value_heads=n_key_value_heads,
             apply_pos_emb_fn=pos_embed_apply_fn,
         )
 
     else:
         attention = Attention(
-            n_head,
+            n_heads,
             head_dim,
-            n_key_value_head=n_key_value_head,
+            n_key_value_heads=n_key_value_heads,
             attn_drop=0,
             apply_pos_emb_fn=pos_embed_apply_fn,
             processor=attention_processor,
@@ -80,12 +76,12 @@ def build_block(
     rmsnorm_post = RMSNorm(
         dim,
         eps=rms_norm_epsilon,
-        weight_init=partial(nn.init.constant_, val=1 / (n_layer**0.5)),
+        weight_init=partial(nn.init.constant_, val=1 / (n_layers**0.5)),
         fast=fast_norm,
     )
 
-    if n_key_value_head is None:
-        n_key_value_head = n_head
+    if n_key_value_heads is None:
+        n_key_value_heads = n_heads
 
     if qkv_split:
         self_attention_class = (
@@ -93,9 +89,9 @@ def build_block(
         )
 
         self_attention = self_attention_class(
-            q=nn.Linear(dim, head_dim * n_head, bias=False),
-            k=nn.Linear(dim, head_dim * n_key_value_head, bias=False),
-            v=nn.Linear(dim, head_dim * n_key_value_head, bias=False),
+            q=nn.Linear(dim, head_dim * n_heads, bias=False),
+            k=nn.Linear(dim, head_dim * n_key_value_heads, bias=False),
+            v=nn.Linear(dim, head_dim * n_key_value_heads, bias=False),
             attention=attention,
             out=nn.Linear(dim, dim, bias=False),
             q_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
@@ -110,7 +106,9 @@ def build_block(
         )
 
         self_attention = self_attention_class(
-            qkv=nn.Linear(dim, head_dim * (n_head + n_key_value_head * 2), bias=False),
+            qkv=nn.Linear(
+                dim, head_dim * (n_heads + n_key_value_heads * 2), bias=False
+            ),
             attention=attention,
             out=nn.Linear(dim, dim, bias=False),
             qkv_split="llama",
@@ -164,11 +162,12 @@ def build_block(
 def transformer(
     vocab_size,
     dim,
-    n_head,
-    n_layer,
+    n_heads,
+    head_dim,
+    n_layers,
     intermediate_size,
-    max_position_embeddings,
-    n_key_value_head=None,
+    context_len,
+    n_key_value_heads=None,
     pos_embed=None,
     pos_embed_apply_fn=None,
     softcap=0.0,
@@ -184,20 +183,21 @@ def transformer(
     fast_norm = attention_processor == "flash_attn"
 
     if pos_embed is None:
-        pos_embed = RotaryEmbedding(dim // n_head, max_position_embeddings)
+        pos_embed = RotaryEmbedding(head_dim, context_len)
 
     if pos_embed_apply_fn is None:
         pos_embed_apply_fn = partial(apply_rotary_emb)
 
-    for i in range(n_layer):
+    for i in range(n_layers):
         blocks += [
             call[build_block](
                 i,
                 dim,
-                n_head,
-                n_layer,
+                n_heads,
+                head_dim,
+                n_layers,
                 intermediate_size,
-                n_key_value_head,
+                n_key_value_heads,
                 softcap,
                 rms_norm_epsilon,
                 post_norm,
@@ -209,16 +209,6 @@ def transformer(
                 infer=infer,
             )
         ]
-
-    transformer_config = TransformerConfig(
-        dim=dim,
-        n_heads=n_head,
-        head_dim=dim // n_head,
-        n_heads_tp=n_head,
-        max_length=None,
-        n_layers=n_layer,
-        vocab_size=vocab_size,
-    )
 
     if infer is not None:
         transformer_class = InferTransformerDecoder
@@ -244,7 +234,6 @@ def transformer(
         tie_embeds=False,
         use_position_ids=True,
         attention_processor=attention_processor,
-        config=transformer_config,
     )
 
     return transformer

@@ -207,28 +207,28 @@ class FlashInferAttention(nn.Module):
     def __init__(
         self,
         layer_id: int,
-        n_head: int,
+        n_heads: int,
         head_dim: int,
-        n_key_value_head: int | None = None,
+        n_key_value_heads: int | None = None,
         apply_pos_emb_fn: Callable = None,
     ):
         super().__init__()
 
         self.layer_id = layer_id
 
-        self.n_head = n_head
+        self.n_heads = n_heads
         self.head_dim = head_dim
-        self.n_key_value_head = n_head
+        self.n_key_value_heads = n_heads
 
-        if n_key_value_head is not None:
-            self.n_key_value_head = n_key_value_head
+        if n_key_value_heads is not None:
+            self.n_key_value_heads = n_key_value_heads
 
         self.apply_pos_emb_fn = apply_pos_emb_fn
 
     def forward(self, query, key, value, batch: Batch, pos_emb=None):
-        query = query.view(-1, self.n_head, self.head_dim)
-        key = key.view(-1, self.n_key_value_head, self.head_dim)
-        value = value.view(-1, self.n_key_value_head, self.head_dim)
+        query = query.view(-1, self.n_heads, self.head_dim)
+        key = key.view(-1, self.n_key_value_heads, self.head_dim)
+        value = value.view(-1, self.n_key_value_heads, self.head_dim)
 
         if self.apply_pos_emb_fn is not None:
             query, key = self.apply_pos_emb_fn(query, key, pos_emb)

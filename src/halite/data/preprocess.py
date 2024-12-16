@@ -41,6 +41,20 @@ class SelectFeatures:
             yield record
 
 
+class Map:
+    def __init__(self, fn):
+        self.fn = fn
+
+    def __call__(self, iterator):
+        for record in iterator:
+            mapped = self.fn(record)
+
+            for key, val in mapped.items():
+                record[key] = val
+
+            yield record
+
+
 class Tokenize:
     def __init__(self, tokenizer, keys=("text",), output_keys=None, **tokenizer_kwargs):
         self.tokenizer = tokenizer

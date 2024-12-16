@@ -46,19 +46,19 @@ class MHAKVPool(KVPool):
         self,
         size: int,
         dtype: torch.dtype,
-        n_head: int,
+        n_heads: int,
         head_dim: int,
-        n_layer: int,
+        n_layers: int,
         device: str,
     ):
         self.size = size
         self.device = device
 
         self.k_buffer = torch.empty(
-            n_layer, size + 1, n_head, head_dim, dtype=dtype, device=device
+            n_layers, size + 1, n_heads, head_dim, dtype=dtype, device=device
         ).unbind(0)
         self.v_buffer = torch.empty(
-            n_layer, size + 1, n_head, head_dim, dtype=dtype, device=device
+            n_layers, size + 1, n_heads, head_dim, dtype=dtype, device=device
         )
 
         self.is_in_free_group = False

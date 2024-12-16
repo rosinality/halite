@@ -23,18 +23,15 @@ from halite.transformers.feedforward import (
     SequenceParallelWrapper,
 )
 from halite.transformers.position import RotaryEmbedding, apply_rotary_emb
-from halite.transformers.transformer import (
-    TransformerConfig,
-    TransformerDecoder,
-)
+from halite.transformers.transformer import TransformerDecoder
 
 
 @config_fn
 def build_block(
     layer_id,
     dim,
-    n_head,
-    n_layer,
+    n_heads,
+    n_layers,
     intermediate_size,
     softcap=0.0,
     rms_norm_epsilon=1e-6,
@@ -45,11 +42,11 @@ def build_block(
     fast_norm=False,
 ):
     attention = DiffAttention(
-        n_head,
-        dim // n_head // 2,
+        n_heads,
+        dim // n_heads // 2,
         lambda_init=0.8 - 0.6 * call[math.exp](-0.3 * layer_id),
         sub_norm=RMSNorm(
-            dim // n_head * 2, eps=1e-5, elementwise_affine=False, fast=fast_norm
+            dim // n_heads * 2, eps=1e-5, elementwise_affine=False, fast=fast_norm
         ),
         attn_drop=0,
         apply_pos_emb_fn=partial(apply_rotary_emb),
@@ -61,7 +58,7 @@ def build_block(
     rmsnorm_post = RMSNorm(
         dim,
         eps=rms_norm_epsilon,
-        weight_init=partial(nn.init.constant_, val=1 / (n_layer**0.5)),
+        weight_init=partial(nn.init.constant_, val=1 / (n_layers**0.5)),
         fast=fast_norm,
     )
 
@@ -128,8 +125,8 @@ def build_block(
 def diff_transformer(
     vocab_size,
     dim,
-    n_head,
-    n_layer,
+    n_heads,
+    n_layers,
     intermediate_size,
     max_position_embeddings,
     softcap=0.0,
@@ -143,13 +140,13 @@ def diff_transformer(
 
     fast_norm = attention_processor == "flash_attn"
 
-    for i in range(n_layer):
+    for i in range(n_layers):
         blocks += [
             call[build_block](
                 i,
                 dim,
-                n_head,
-                n_layer,
+                n_heads,
+                n_layers,
                 intermediate_size,
                 softcap,
                 rms_norm_epsilon,
@@ -161,16 +158,6 @@ def diff_transformer(
             )
         ]
 
-    transformer_config = TransformerConfig(
-        dim=dim,
-        n_heads=n_head,
-        head_dim=dim // n_head // 2,
-        n_heads_tp=n_head,
-        max_length=None,
-        n_layers=n_layer,
-        vocab_size=vocab_size,
-    )
-
     transformer = TransformerDecoder(
         embedding=TextEmbedding(
             nn.Embedding(vocab_size, dim),
@@ -178,7 +165,7 @@ def diff_transformer(
             embed_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
             multiplier=dim**0.5,
         ),
-        pos_embed=RotaryEmbedding(dim // n_head // 2, max_position_embeddings),
+        pos_embed=RotaryEmbedding(dim // n_heads // 2, max_position_embeddings),
         blocks=blocks,
         post_blocks=SequenceParallelWrapper(
             RMSNorm(dim, eps=rms_norm_epsilon, fast=fast_norm)
@@ -190,7 +177,6 @@ def diff_transformer(
         tie_embeds=False,
         use_position_ids=True,
         attention_processor=attention_processor,
-        config=transformer_config,
     )
 
     return transformer

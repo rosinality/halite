@@ -200,6 +200,7 @@ class Scheduler:
         running_batch_size = (
             len(self.running_batch.requests) if self.running_batch else 0
         )
+
         if running_batch_size >= self.max_running_requests:
             self.batch_is_full = True
 

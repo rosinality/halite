@@ -10,10 +10,10 @@ from halite.transformers.infer.engine.flashinfer_backend import FlashInferBacken
 
 @dataclass
 class ModelConfig:
-    n_head: int
-    n_key_value_head: int
+    n_heads: int
+    n_key_value_heads: int
     head_dim: int
-    n_layer: int
+    n_layers: int
     context_len: int
     tp_size: int = 1
     memory_fraction_static: float | None = None
@@ -49,10 +49,10 @@ class ModelRunner:
         self.model = model
         self.sampler = Sampler()
 
-        n_head = model_config.n_head
-        n_key_value_head = model_config.n_key_value_head
+        n_heads = model_config.n_heads
+        n_key_value_heads = model_config.n_key_value_heads
         head_dim = model_config.head_dim
-        n_layer = model_config.n_layer
+        n_layers = model_config.n_layers
         context_len = model_config.context_len
         memory_fraction_static = model_config.memory_fraction_static
         kv_cache_dtype = model_config.kv_cache_dtype
@@ -63,9 +63,9 @@ class ModelRunner:
         if kv_cache_dtype == "auto":
             kv_cache_dtype = model.dtype
 
-        self.n_kv_head = n_key_value_head
+        self.n_kv_head = n_key_value_heads
         self.head_dim = head_dim
-        self.n_layer = n_layer
+        self.n_layer = n_layers
         self.kv_cache_dtype = kv_cache_dtype
 
         self.memory_fraction_static = memory_fraction_static
@@ -88,14 +88,14 @@ class ModelRunner:
         self.kv_pool = MHAKVPool(
             self.max_total_tokens,
             dtype=kv_cache_dtype,
-            n_head=n_key_value_head,
+            n_heads=n_key_value_heads,
             head_dim=head_dim,
-            n_layer=n_layer,
+            n_layers=n_layers,
             device=device,
         )
         self.attention_backend = FlashInferBackend(
-            n_head,
-            n_key_value_head,
+            n_heads,
+            n_key_value_heads,
             head_dim,
             is_causal=True,
             scale=None,

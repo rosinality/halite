@@ -16,10 +16,7 @@ from halite.transformers.feedforward import (
     SequenceParallelWrapper,
 )
 from halite.transformers.position import RotaryEmbedding, apply_rotary_emb
-from halite.transformers.transformer import (
-    TransformerConfig,
-    TransformerDecoder,
-)
+from halite.transformers.transformer import TransformerDecoder
 from halite.transformers.moe.moe import MoE
 from halite.transformers.moe.router import TopKRouter
 from halite.transformers.moe.scattermoe.scattermoe import ExpertLinear, FeedForward
@@ -29,9 +26,9 @@ from halite.transformers.moe.scattermoe.scattermoe import ExpertLinear, FeedForw
 def moe_transformer(
     vocab_size,
     dim,
-    n_head,
-    n_layer,
-    n_expert,
+    n_heads,
+    n_layers,
+    n_experts,
     expert_top_k,
     z_loss,
     load_balance_loss,
@@ -49,8 +46,8 @@ def moe_transformer(
     kaiming_init = partial(kaiming_normal_, nonlinearity="linear", truncate=3)
 
     attention = Attention(
-        n_head,
-        dim // n_head,
+        n_heads,
+        dim // n_heads,
         attn_drop=0,
         apply_pos_emb_fn=partial(apply_rotary_emb),
         processor=attention_processor,
@@ -61,7 +58,7 @@ def moe_transformer(
     rmsnorm_post = RMSNorm(
         dim,
         eps=rms_norm_epsilon,
-        weight_init=partial(nn.init.constant_, val=1 / (n_layer**0.5)),
+        weight_init=partial(nn.init.constant_, val=1 / (n_layers**0.5)),
         fast=fast_norm,
     )
 
@@ -91,7 +88,7 @@ def moe_transformer(
     ff = MoE(
         TopKRouter(
             dim,
-            n_expert,
+            n_experts,
             expert_top_k,
             gate_init=kaiming_init,
             z_loss=z_loss,
@@ -101,9 +98,9 @@ def moe_transformer(
         ),
         None,
         FeedForward(
-            ExpertLinear(n_expert, dim, intermediate_size * 2),
+            ExpertLinear(n_experts, dim, intermediate_size * 2),
             SwiGLU(),
-            ExpertLinear(n_expert, intermediate_size, dim),
+            ExpertLinear(n_experts, intermediate_size, dim),
             top_k=expert_top_k,
             linear1_init=partial(kaiming_normal_, nonlinearity="linear", truncate=3),
             linear2_init=partial(kaiming_normal_, nonlinearity="linear", truncate=3),
@@ -123,18 +120,8 @@ def moe_transformer(
         ),
     )
 
-    for _ in range(n_layer):
+    for _ in range(n_layers):
         blocks += [deepcopy(block)]
-
-    transformer_config = TransformerConfig(
-        dim=dim,
-        n_heads=n_head,
-        head_dim=dim // n_head,
-        n_heads_tp=n_head,
-        max_length=None,
-        n_layers=n_layer,
-        vocab_size=vocab_size,
-    )
 
     transformer = TransformerDecoder(
         embedding=TextEmbedding(
@@ -143,7 +130,7 @@ def moe_transformer(
             embed_init=kaiming_init,
             multiplier=dim**0.5,
         ),
-        pos_embed=RotaryEmbedding(dim // n_head, max_position_embeddings),
+        pos_embed=RotaryEmbedding(dim // n_heads, max_position_embeddings),
         blocks=blocks,
         post_blocks=SequenceParallelWrapper(
             RMSNorm(dim, eps=rms_norm_epsilon, fast=fast_norm)
@@ -155,7 +142,6 @@ def moe_transformer(
         tie_embeds=False,
         use_position_ids=True,
         attention_processor=attention_processor,
-        config=transformer_config,
     )
 
     return transformer
