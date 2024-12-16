@@ -8,8 +8,8 @@ from flashinfer import (
     BatchDecodeWithPagedKVCacheWrapper,
 )
 
-from halite.transformers.infer.batch import Batch, ForwardMode
-from halite.transformers.infer.memory_pool import RequestToTokenPool
+from halite.transformers.infer.engine.batch import Batch, ForwardMode
+from halite.transformers.infer.engine.memory_pool import RequestToTokenPool
 
 
 @triton.jit
@@ -48,6 +48,31 @@ def calc_kv_indices_kernel(
         st_offset += BLOCK_SIZE
 
 
+def should_use_tensor_core(kv_cache_dtype, n_qo_heads, n_kv_heads):
+    try:
+        from flashinfer.decode import _grouped_size_compiled_for_decode_kernels
+
+        if not _grouped_size_compiled_for_decode_kernels(n_qo_heads, n_kv_heads):
+            return True
+
+        else:
+            return False
+
+    except (ImportError, AttributeError):
+        pass
+
+    gqa_group_size = n_qo_heads // n_kv_heads
+
+    if kv_cache_dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
+        return True
+
+    elif kv_cache_dtype in (torch.float16, torch.half, torch.bfloat16):
+        return gqa_group_size > 4
+
+    else:
+        return False
+
+
 class FlashInferBackend:
     def __init__(
         self,
@@ -63,6 +88,8 @@ class FlashInferBackend:
         device: str = "cuda",
         workspace_size: int = 128 * 1024 * 1024,
     ):
+        self.use_tensor_cores = should_use_tensor_core(dtype, n_qo_heads, n_kv_heads)
+
         self.n_qo_heads = n_qo_heads
         self.n_kv_heads = n_kv_heads
         self.head_dim = head_dim
@@ -90,7 +117,9 @@ class FlashInferBackend:
         )
 
         self.decode = BatchDecodeWithPagedKVCacheWrapper(
-            torch.empty(workspace_size, dtype=torch.uint8, device=device), "NHD"
+            torch.empty(workspace_size, dtype=torch.uint8, device=device),
+            "NHD",
+            use_tensor_cores=self.use_tensor_cores,
         )
 
     def get_wrapper(self):

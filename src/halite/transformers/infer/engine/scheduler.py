@@ -5,13 +5,16 @@ import torch
 
 from halite.logging import logger
 
-from halite.transformers.infer.batch import Request, SamplingParams, Batch
-from halite.transformers.infer.model_runner import ModelRunner
-from halite.transformers.infer.schedule_policy import PrefillAdder, AddRequestResult
-from halite.transformers.infer.radix_cache import RadixCache
+from halite.transformers.infer.engine.batch import Request, SamplingParams, Batch
+from halite.transformers.infer.engine.model_runner import ModelRunner
+from halite.transformers.infer.engine.schedule_policy import (
+    PrefillAdder,
+    AddRequestResult,
+)
+from halite.transformers.infer.engine.radix_cache import RadixCache
 
 
-class ServerArgs:
+class ServerConfig:
     max_prefill_tokens: int = 16384
     chunked_prefill_size: int = 8192
 
@@ -22,7 +25,9 @@ class ServerArgs:
 
 
 class Scheduler:
-    def __init__(self, model_runner: ModelRunner, tokenizer, server_args: ServerArgs):
+    def __init__(
+        self, model_runner: ModelRunner, tokenizer, server_config: ServerConfig
+    ):
         self.model_runner = model_runner
         self.tokenizer = tokenizer
 
@@ -39,20 +44,21 @@ class Scheduler:
         self.is_mixed_chunk = False
 
         self.init_new_token_ratio = min(
-            server_args.default_init_new_token_ratio
-            * server_args.schedule_conservativeness,
+            server_config.default_init_new_token_ratio
+            * server_config.schedule_conservativeness,
             1.0,
         )
         self.min_new_token_ratio = min(
-            self.init_new_token_ratio * server_args.default_min_new_token_ratio_factor,
+            self.init_new_token_ratio
+            * server_config.default_min_new_token_ratio_factor,
             1.0,
         )
         self.new_token_ratio_decay = (
             self.init_new_token_ratio - self.min_new_token_ratio
-        ) / server_args.default_new_token_ratio_decay_steps
+        ) / server_config.default_new_token_ratio_decay_steps
         self.new_token_ratio = self.init_new_token_ratio
-        self.max_prefill_tokens = server_args.max_prefill_tokens
-        self.chunked_prefill_size = server_args.chunked_prefill_size
+        self.max_prefill_tokens = server_config.max_prefill_tokens
+        self.chunked_prefill_size = server_config.chunked_prefill_size
 
         self.last_batch = None
 
@@ -140,8 +146,10 @@ class Scheduler:
 
                 req = Request(i, input_text, input_ids, sampling_params)
 
-            else:
+            elif not isinstance(req, Request):
                 raise ValueError(f"Invalid request type: {type(req)}")
+
+            req.normalize_sampling_params(self.tokenizer)
 
             results.append(req)
 
@@ -192,6 +200,7 @@ class Scheduler:
         running_batch_size = (
             len(self.running_batch.requests) if self.running_batch else 0
         )
+
         if running_batch_size >= self.max_running_requests:
             self.batch_is_full = True
 

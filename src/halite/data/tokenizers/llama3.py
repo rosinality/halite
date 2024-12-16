@@ -102,15 +102,27 @@ class Llama3Tokenizer:
             self.special_tokens["<|eom_id|>"],
             self.special_tokens["<|eot_id|>"],
         ]
+        self.additional_stop_token_ids = set()
+
+    def postprocess_tokens(
+        self, tokens: Sequence[int], bos: bool = True, eos: bool = False
+    ):
+        if bos:
+            tokens.insert(0, self.bos_id)
+
+        if eos:
+            tokens.append(self.eos_id)
+
+        return tokens
 
     def encode(
         self,
         s: str,
         *,
-        bos: bool,
-        eos: bool,
+        add_special_tokens: bool = True,
         allowed_special: Optional[Union[Literal["all"], AbstractSet[str]]] = None,
         disallowed_special: Union[Literal["all"], Collection[str]] = (),
+        **postprocess_kwargs,
     ) -> List[int]:
         """
         Encodes a string into a list of token IDs.
@@ -153,10 +165,10 @@ class Llama3Tokenizer:
                     disallowed_special=disallowed_special,
                 )
             )
-        if bos:
-            t.insert(0, self.bos_id)
-        if eos:
-            t.append(self.eos_id)
+
+        if add_special_tokens:
+            t = self.postprocess_tokens(t, **postprocess_kwargs)
+
         return t
 
     def decode(self, t: Sequence[int]) -> str:

@@ -29,7 +29,7 @@ if __name__ == "__main__":
 
     logger.info("converting checkpoints")
     converted = convert_checkpoint(
-        checkpoints, conf.model_config, conf.policy, mode="to_halite"
+        checkpoints, conf.model_conf, conf.policy, mode="to_halite"
     )
 
     logger.info("saving checkpoints")

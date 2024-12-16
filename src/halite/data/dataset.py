@@ -77,7 +77,7 @@ class MapDataset(data.Dataset):
         self.operations = [] if operations is None else operations
 
     def __len__(self):
-        return len(self.dataset)
+        return self.points[-1]
 
     def __getitem__(self, idx):
         dataset_idx = bisect.bisect_right(self.points, idx)
@@ -100,7 +100,12 @@ class MapDataset(data.Dataset):
             },
         )
 
-        return record
+        record = [record]
+
+        for op in self.operations:
+            record = op(record)
+
+        return next(record)
 
 
 class WeightedIterableDataset(data.IterableDataset):

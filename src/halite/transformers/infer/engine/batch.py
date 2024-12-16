@@ -4,8 +4,8 @@ from typing import Any
 
 import torch
 
-from halite.transformers.infer.memory_pool import RequestToTokenPool, KVPool
-from halite.transformers.infer.radix_cache import RadixCache
+from halite.transformers.infer.engine.memory_pool import RequestToTokenPool, KVPool
+from halite.transformers.infer.engine.radix_cache import RadixCache
 
 
 class ForwardMode(IntEnum):
@@ -45,7 +45,12 @@ class SamplingParams:
         if self.top_k == -1:
             self.top_k = 1 << 30
 
+        self.normalized = False
+
     def normalize(self, tokenizer):
+        if self.normalized:
+            return
+
         if self.stop_strs is None:
             self.stop_strs = []
             self.stop_str_max_len = 0
@@ -64,6 +69,8 @@ class SamplingParams:
                     stop_str_max_len = max(stop_str_max_len, len(stop_str))
 
             self.stop_str_max_len = stop_str_max_len
+
+        self.normalized = True
 
 
 @dataclass
@@ -159,6 +166,9 @@ class Request:
         self.output_logprobs = []
         self.output_top_logprobs = []
 
+    def normalize_sampling_params(self, tokenizer):
+        self.sampling_params.normalize(tokenizer)
+
     def finished(self):
         return self.finished_reason is not None
 
@@ -189,7 +199,7 @@ class Request:
             self.finished_reason = FinishReason("stop", matched=last_token_id)
 
         if len(self.sampling_params.stop_strs) > 0:
-            tail_str = self.tokenizer.decode(
+            tail_str = tokenizer.decode(
                 self.output_ids[-(self.sampling_params.stop_str_max_len + 1) :]
             )
 
@@ -416,9 +426,12 @@ class Batch:
         )
         self.seq_lens = torch.cat((self.seq_lens, other.seq_lens))
         self.seq_lens_sum += other.seq_lens_sum
+        self.kv_pool_ids = None
 
         if self.output_ids is not None:
             self.output_ids = torch.cat((self.output_ids, other.output_ids))
+
+        self.requests.extend(other.requests)
 
     def check_decode_memory(self):
         batch_size = len(self.requests)

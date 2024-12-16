@@ -1,32 +1,71 @@
+from dataclasses import dataclass
+
 import torch
 
-from halite.transformers.infer.sampler import Sampler
-from halite.transformers.infer.memory_pool import RequestToTokenPool, MHAKVPool
-from halite.transformers.infer.device import get_available_gpu_memory
-from halite.transformers.infer.flashinfer_backend import FlashInferBackend
+from halite.transformers.infer.engine.sampler import Sampler
+from halite.transformers.infer.engine.memory_pool import RequestToTokenPool, MHAKVPool
+from halite.transformers.infer.engine.device import get_available_gpu_memory
+from halite.transformers.infer.engine.flashinfer_backend import FlashInferBackend
+
+
+@dataclass
+class ModelConfig:
+    n_heads: int
+    n_key_value_heads: int
+    head_dim: int
+    n_layers: int
+    context_len: int
+    tp_size: int = 1
+    memory_fraction_static: float | None = None
+    kv_cache_dtype: torch.dtype = "auto"
+    gpu_id: int = 0
+    device: torch.device | str = "cuda"
+    distributed: bool = False
+
+    def __post_init__(self):
+        if self.memory_fraction_static is None:
+            if self.tp_size >= 16:
+                self.memory_fraction_static = 0.79
+
+            elif self.tp_size >= 8:
+                self.memory_fraction_static = 0.81
+
+            elif self.tp_size >= 4:
+                self.memory_fraction_static = 0.85
+
+            elif self.tp_size >= 2:
+                self.memory_fraction_static = 0.87
+
+            else:
+                self.memory_fraction_static = 0.88
 
 
 class ModelRunner:
     def __init__(
         self,
         model,
-        n_head,
-        n_key_value_head,
-        head_dim,
-        n_layer,
-        context_len,
-        memory_fraction_static,
-        kv_cache_dtype,
-        gpu_id,
-        device,
-        distributed=False,
+        model_config: ModelConfig,
     ):
         self.model = model
         self.sampler = Sampler()
 
-        self.n_kv_head = n_key_value_head
+        n_heads = model_config.n_heads
+        n_key_value_heads = model_config.n_key_value_heads
+        head_dim = model_config.head_dim
+        n_layers = model_config.n_layers
+        context_len = model_config.context_len
+        memory_fraction_static = model_config.memory_fraction_static
+        kv_cache_dtype = model_config.kv_cache_dtype
+        gpu_id = model_config.gpu_id
+        device = model_config.device
+        distributed = model_config.distributed
+
+        if kv_cache_dtype == "auto":
+            kv_cache_dtype = model.dtype
+
+        self.n_kv_head = n_key_value_heads
         self.head_dim = head_dim
-        self.n_layer = n_layer
+        self.n_layer = n_layers
         self.kv_cache_dtype = kv_cache_dtype
 
         self.memory_fraction_static = memory_fraction_static
@@ -49,17 +88,17 @@ class ModelRunner:
         self.kv_pool = MHAKVPool(
             self.max_total_tokens,
             dtype=kv_cache_dtype,
-            n_head=n_key_value_head,
+            n_heads=n_key_value_heads,
             head_dim=head_dim,
-            n_layer=n_layer,
+            n_layers=n_layers,
             device=device,
         )
         self.attention_backend = FlashInferBackend(
-            n_head,
-            n_key_value_head,
+            n_heads,
+            n_key_value_heads,
             head_dim,
             is_causal=True,
-            normalize=None,
+            scale=None,
             dtype=kv_cache_dtype,
             request_to_token=self.request_to_token_pool,
             max_batch_size=self.request_to_token_pool.max_size,
