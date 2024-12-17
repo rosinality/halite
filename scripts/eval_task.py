@@ -2,7 +2,7 @@ import argparse
 import os
 
 from rich.progress import Progress
-from slickconf import build_config, instantiate, load_config
+from slickconf import build_config, instantiate, load_config, summarize
 import torch
 import torch.distributed.checkpoint as dcp
 from torch.utils.data import DataLoader
@@ -110,7 +110,7 @@ def main():
     mesh = pdims.build_mesh("cuda")
     logger = get_logger(mesh)
 
-    logger.info(conf.dict())
+    logger.info(summarize(conf))
     logger.info(f"dp replicate: {pdims.dp_replicate}")
 
     device = torch.device("cuda")

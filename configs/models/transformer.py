@@ -1,7 +1,7 @@
 from copy import deepcopy
 from functools import partial
 
-from slickconf import field, config_fn, call, select
+from slickconf import config_fn, call, annotate
 from torch import nn
 
 from halite.nn.activation import SwiGLU
@@ -53,7 +53,7 @@ def build_block(
 ):
     if infer == "flashinfer":
         attention = FlashInferAttention(
-            layer_id,
+            annotate("layer_id", layer_id),
             n_heads,
             head_dim,
             n_key_value_heads=n_key_value_heads,
