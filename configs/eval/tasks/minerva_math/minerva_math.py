@@ -3,8 +3,8 @@ from functools import partial
 from slickconf import field, function
 
 from halite.data.preprocess import SelectFeatures, Map
+from halite.projects.common.template import get_render_fn
 from halite.projects.eval.dataset import hf_dataset, first_n
-from halite.projects.eval.template import get_render_fn
 
 from .eval import evaluate, record_to_input, fewshot_samples
 

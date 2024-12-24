@@ -1,6 +1,6 @@
 from functools import partial
 
-from slickconf import call, field, function
+from slickconf import call, field, function, tag
 
 from halite.data.tokenizers.llama3 import Llama3Tokenizer
 from halite.transformers.position import Llama3RoPE, apply_rotary_emb
@@ -44,7 +44,7 @@ conf.model_conf = field(
     **transformer_config, use_complex_rope=use_complex_rope, dtype="bfloat16"
 )
 
-conf.tokenizer = partial(Llama3Tokenizer)
+conf.tokenizer = Llama3Tokenizer()
 
 conf.policy = field(
     weight_maps=weight_maps,

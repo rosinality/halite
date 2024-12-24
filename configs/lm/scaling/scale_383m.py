@@ -10,7 +10,7 @@ from halite.transformers.parallelize import parallelize
 from halite.data.tokenizers.sentencepiece import SentencePieceTokenizer
 
 from ...data.dclm_samples import conf as data_conf
-from ...models.scaling.base import transformer
+from ...models.transformer import transformer
 
 conf = field()
 
@@ -27,9 +27,10 @@ conf.model = field(
         vocab_size=n_vocab,
         dim=1024,
         n_heads=8,
+        head_dim=1024 // 8,
         n_layers=23,
         intermediate_size=call[int](1024 * 3.5),
-        max_position_embeddings=max_length,
+        context_len=max_length,
         softcap=50.0,
         post_norm=True,
         attention_processor="torch",

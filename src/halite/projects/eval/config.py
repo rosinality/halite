@@ -18,7 +18,7 @@ class SamplingParams(Config):
     temperature: float = 1.0
     top_p: float = 1.0
     top_k: StrictInt = -1
-    min_p: float = 0
+    min_p: float = 0.0
     stop: str | list[str] | None = None
     stop_token_ids: list[int] | None = None
 
@@ -51,12 +51,11 @@ class Task(Config):
     prefix: Instance | None = None
 
 
-class Eval(Config):
-    batch_size: StrictInt
-    tokenizer: str | None = None
+class EvalTask(Config):
+    batch_size: StrictInt = 1
 
 
 class EvalTaskConfig(MainConfig):
     tasks: list[Task]
     model: Model
-    eval: Eval
+    eval_task: EvalTask

@@ -27,8 +27,9 @@ from halite.transformers.transformer import (
 def transformer(
     vocab_size,
     dim,
-    n_head,
-    n_layer,
+    n_heads,
+    head_dim,
+    n_layers,
     intermediate_size,
     max_position_embeddings,
     softcap=0.0,
@@ -43,8 +44,8 @@ def transformer(
     fast_norm = attention_processor == "flash_attn"
 
     attention = Attention(
-        n_head,
-        dim // n_head,
+        n_heads,
+        head_dim,
         attn_drop=0,
         apply_pos_emb_fn=partial(apply_rotary_emb),
         processor=attention_processor,
@@ -55,7 +56,7 @@ def transformer(
     rmsnorm_post = RMSNorm(
         dim,
         eps=rms_norm_epsilon,
-        weight_init=partial(nn.init.constant_, val=1 / (n_layer**0.5)),
+        weight_init=partial(nn.init.constant_, val=1 / (n_layers**0.5)),
         fast=fast_norm,
     )
 
@@ -115,16 +116,16 @@ def transformer(
         ),
     )
 
-    for _ in range(n_layer):
+    for _ in range(n_layers):
         blocks += [deepcopy(block)]
 
     transformer_config = TransformerConfig(
         dim=dim,
-        n_heads=n_head,
-        head_dim=dim // n_head,
-        n_heads_tp=n_head,
+        n_heads=n_heads,
+        head_dim=head_dim,
+        n_heads_tp=n_heads,
         max_length=None,
-        n_layers=n_layer,
+        n_layers=n_layers,
         vocab_size=vocab_size,
     )
 
@@ -135,7 +136,7 @@ def transformer(
             embed_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
             multiplier=dim**0.5,
         ),
-        pos_embed=RotaryEmbedding(dim // n_head, max_position_embeddings),
+        pos_embed=RotaryEmbedding(head_dim, max_position_embeddings),
         blocks=blocks,
         post_blocks=SequenceParallelWrapper(
             RMSNorm(dim, eps=rms_norm_epsilon, fast=fast_norm)
