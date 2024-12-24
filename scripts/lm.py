@@ -5,7 +5,7 @@ import torch.distributed.checkpoint as dcp
 from torch.distributed.checkpoint.state_dict import get_model_state_dict
 from torch import nn
 from torch.utils.data import DataLoader
-from slickconf import instantiate, load_arg_config
+from slickconf import instantiate, load_arg_config, summarize
 
 try:
     import wandb
@@ -38,7 +38,7 @@ def train(
 ):
     is_train = model.training
     model.train()
-    
+
     if conf.training.model_initializer is not None:
         initializer = instantiate(conf.training.model_initializer)
         initializer(model)
@@ -233,7 +233,7 @@ def main():
     mesh = pdims.build_mesh("cuda")
     logger = get_logger(mesh)
 
-    logger.info(conf.dict())
+    logger.info(summarize(conf))
     logger.info(
         f"dp replicate: {pdims.dp_replicate}, dp shard: {pdims.dp_shard}, tp: {pdims.tp} pp: {pdims.pp}"
     )

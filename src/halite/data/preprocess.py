@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 import orjson
 import torch
 
@@ -76,6 +78,11 @@ class Tokenize:
                 )
 
             yield features
+
+
+@dataclass
+class SequencePackingState:
+    start_token: int
 
 
 class SequencePacking:

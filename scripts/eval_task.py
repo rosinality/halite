@@ -2,7 +2,8 @@ import argparse
 import os
 
 from rich.progress import Progress
-from slickconf import build_config, instantiate, load_config, summarize
+from slickconf import instantiate, load_config, summarize
+from slickconf.loader import apply_overrides
 import torch
 import torch.distributed.checkpoint as dcp
 from torch.utils.data import DataLoader
@@ -11,12 +12,12 @@ from halite.data.dataset import MapDataset
 from halite.data.preprocess import Collator
 from halite.logging import get_logger
 from halite.parallel import ParallelDims
-from halite.transformers.infer import InferenceEngine, ModelConfig, SamplingParams
-from halite.projects.eval.config import EvalTaskConfig, Model, Task, Eval
+from halite.transformers.infer import InferenceEngine, ModelConfig
+from halite.projects.eval.config import EvalTaskConfig, Model, Task, EvalTask
 from halite.utils import get_torch_dtype
 
 
-def run_task(engine: InferenceEngine, task: Task, eval: Eval, logger):
+def run_task(engine: InferenceEngine, task: Task, eval: EvalTask, logger):
     dset = instantiate(task.dataset)
     eval_fn = instantiate(task.evaluate_fn)
 
@@ -131,9 +132,9 @@ def main():
     model.eval()
 
     state_dict = {"model": model.state_dict()}
-    dcp.load(state_dict, checkpoint_id=conf.ckpt)
+    dcp.load(state_dict, checkpoint_id=conf.model.checkpoint_path)
 
-    tokenizer = instantiate(conf.model.tokenizer)(conf.eval.tokenizer)
+    tokenizer = instantiate(conf.model.tokenizer)
 
     device = "cuda"
     model_conf = conf.model.model_conf
@@ -153,7 +154,7 @@ def main():
     )
 
     for task in conf.tasks:
-        run_task(engine, task, conf.eval, logger)
+        run_task(engine, task, conf.eval_task, logger)
 
 
 def parse_args():
@@ -161,13 +162,11 @@ def parse_args():
 
     parser.add_argument("--model", type=str)
     parser.add_argument("--tasks", type=str, nargs="+")
-    parser.add_argument("--eval", type=str, default=None)
-    parser.add_argument("--ckpt", type=str, default=None)
     parser.add_argument("opts", default=None, nargs=argparse.REMAINDER)
 
     args = parser.parse_args()
 
-    model = load_config(args.model, Model)
+    model = Model(checkpoint_path=args.model)
     tasks = []
 
     for task in args.tasks:
@@ -176,13 +175,11 @@ def parse_args():
         for subtask in task.tasks:
             tasks.append(Task(**subtask))
 
-    if args.eval is not None:
-        eval = load_config(args.eval, Eval, args.opts)
-
-    else:
-        eval = build_config(args.opts, Eval)
-
-    conf = EvalTaskConfig(model=model, tasks=tasks, eval=eval, ckpt=args.ckpt)
+    conf = dict(model=model, tasks=tasks)
+    eval_task = {}
+    apply_overrides(eval_task, args.opts)
+    conf["eval_task"] = eval_task
+    conf = EvalTaskConfig(**conf)
 
     return conf
 
