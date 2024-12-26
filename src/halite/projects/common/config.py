@@ -1,9 +1,10 @@
+import copy
 import os
 import json
 from typing import Any
 
 from pydantic import StrictBool, StrictInt, StrictStr
-from slickconf import Config, Instance
+from slickconf import Config, Instance, exempt, deserialize, field
 
 from halite.transformers import TransformerConfig
 
@@ -39,6 +40,58 @@ class Model(Config):
 
         if "model_conf" in conf:
             self.model_conf = TransformerConfig(**conf["model_conf"])
+
+
+@exempt
+def load_model(checkpoint_path):
+    model_conf = deserialize(os.path.join(checkpoint_path, "config.json"))
+
+    conf = field()
+
+    if "model" in model_conf:
+        conf.model = model_conf["model"]
+
+    if "model_infer" in model_conf:
+        conf.model_infer = model_conf["model_infer"]
+
+    if "tokenizer" in model_conf:
+        conf.tokenizer = model_conf["tokenizer"]
+
+    tokenizer_path = os.path.join(checkpoint_path, "tokenizer.model")
+    if os.path.exists(tokenizer_path):
+        conf.tokenizer.model_path = tokenizer_path
+
+    if "model_conf" in model_conf:
+        conf.model_conf = model_conf["model_conf"]
+
+    return conf
+
+
+def get_tokenizer(model):
+    if "tokenizer" in model and model["tokenizer"] is not None:
+        tokenizer = copy.deepcopy(model["tokenizer"])
+
+        if "checkpoint_path" in model:
+            tokenizer["model_path"] = os.path.join(
+                model["checkpoint_path"], "tokenizer.model"
+            )
+
+        return Instance(tokenizer)
+
+    if "checkpoint_path" not in model or model["checkpoint_path"] is None:
+        raise ValueError("tokenizer or checkpoint is not specified")
+
+    with open(
+        os.path.join(model["checkpoint_path"], "tokenizer_config.json"), "r"
+    ) as f:
+        conf = json.load(f)
+
+    tokenizer = Instance(conf)
+    tokenizer_path = os.path.join(model["checkpoint_path"], "tokenizer.model")
+    if os.path.exists(tokenizer_path):
+        tokenizer.model_path = tokenizer_path
+
+    return tokenizer
 
 
 class Training(Config):
