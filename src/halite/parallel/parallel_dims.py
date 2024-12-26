@@ -62,6 +62,10 @@ class ParallelDims:
                 else:
                     names.append(name)
 
+        if len(dims) == 0:
+            dims = [1]
+            names = ["dp"]
+
         names = tuple(names)
 
         self.mesh = dist.device_mesh.init_device_mesh(

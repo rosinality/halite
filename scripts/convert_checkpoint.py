@@ -45,5 +45,9 @@ if __name__ == "__main__":
     dcp.save({"model": converted}, storage_writer=storage_writer)
 
     logger.info("saving tokenizer")
+    if conf.tokenizer is not None:
+        with open(os.path.join(args.out, "tokenizer_config.json"), "w") as f:
+            json.dump(conf.tokenizer.to_dict(), f)
+
     if args.tokenizer is not None:
         shutil.copy(args.tokenizer, os.path.join(args.out, "tokenizer.model"))
