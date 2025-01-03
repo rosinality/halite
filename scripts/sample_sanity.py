@@ -37,7 +37,7 @@ def log_samples(
         logger.info(f"batch {step}")
         logger.info(batch)
 
-        batch_keys = batch._tokenized_keys_
+        batch_keys = batch._meta_["tokenized_keys"]
         for key in batch_keys:
             feature = batch[key].tolist()
 

@@ -37,7 +37,7 @@ if __name__ == "__main__":
 
     logger.info("saving config")
     with open(os.path.join(args.out, "config.json"), "w") as f:
-        json.dump(conf.to_dict(), f)
+        json.dump(conf.to_dict(), f, indent=2)
 
     logger.info("saving checkpoints")
     os.makedirs(args.out, exist_ok=True)
@@ -47,7 +47,7 @@ if __name__ == "__main__":
     logger.info("saving tokenizer")
     if conf.tokenizer is not None:
         with open(os.path.join(args.out, "tokenizer_config.json"), "w") as f:
-            json.dump(conf.tokenizer.to_dict(), f)
+            json.dump(conf.tokenizer.to_dict(), f, indent=2)
 
     if args.tokenizer is not None:
         shutil.copy(args.tokenizer, os.path.join(args.out, "tokenizer.model"))
