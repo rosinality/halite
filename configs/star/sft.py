@@ -1,9 +1,12 @@
 from functools import partial
 
-from slickconf import field, get_instance_attr, tag
+from slickconf import field
 
 from halite.data import preprocess
-from halite.projects.common.config import get_tokenizer, load_model
+from halite.nn.loss import CrossEntropyLoss
+from halite.optim import lr_scheduler
+from halite.transformers.parallelize import parallelize
+from halite.projects.common.config import load_model
 from halite.projects.common.template import simple_format
 from halite.projects.sft.preprocess import SFTSample, SFTSequencePacking
 
@@ -16,6 +19,15 @@ response_template = " {0}"
 conf = field()
 
 conf.model = load_model(model_checkpoint)
+conf.wrapper = partial(
+    parallelize,
+    param_dtype="bfloat16",
+    reduce_dtype="float32",
+    tensor_parallel_config={"enable_async_tp": True},
+    activation_checkpointing=True,
+    activation_checkpointing_config={"mode": "full", "selective": "op"},
+    compile=True,
+)
 
 conf.data = field(
     train=data_conf.train,
