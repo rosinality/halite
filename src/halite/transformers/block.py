@@ -29,7 +29,6 @@ class TransformerEncoderBlock(nn.Module):
             use_cache,
             unpad_params,
         )
-        print(out)
         out = self.ff(out)
         # print(out)
 
