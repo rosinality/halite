@@ -82,9 +82,11 @@ conf.output = field(log_step=10)
 
 
 def base_383m():
-    select(conf, SentencePieceTokenizer).set(
-        model_path="/mnt/naplm/seonghyeon/llama2-tokenizer.model"
+    new_conf = (
+        select(conf)
+        .instance(SentencePieceTokenizer)
+        .update_dict(dict(model_path="/mnt/naplm/seonghyeon/llama2-tokenizer.model"))
     )
-    conf.output.output_dir = "/mnt/ddn/seonghyeon/base_383m"
+    new_conf.output.output_dir = "/mnt/ddn/seonghyeon/base_383m"
 
-    return conf
+    return new_conf

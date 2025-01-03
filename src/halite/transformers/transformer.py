@@ -49,6 +49,7 @@ class TransformerDecoder(nn.Module, GenerationMixin, ModelMixin):
         tie_embeds=False,
         use_position_ids=False,
         attention_processor="native",
+        flex_attention_processor=None,
         config=None,
     ):
         super().__init__()
@@ -81,6 +82,8 @@ class TransformerDecoder(nn.Module, GenerationMixin, ModelMixin):
 
         self.use_position_ids = use_position_ids
         self.flash_attn = attention_processor == "flash_attn"
+
+        self.flex_attention_processor = flex_attention_processor
 
         if tie_embeds and self.head is not None:
             self.head.tie_weight(self.embedding.embed_weight)
@@ -233,6 +236,7 @@ class TransformerDecoder(nn.Module, GenerationMixin, ModelMixin):
         cache=None,
         use_cache=False,
         output_hidden_states=False,
+        document_offsets=None,
     ):
         out = self.embedding(input_ids=input_ids)
 
@@ -285,6 +289,15 @@ class TransformerDecoder(nn.Module, GenerationMixin, ModelMixin):
                 input_ids.shape[0],
                 key_length,
                 input_ids.device,
+            )
+
+        if self.flex_attention_processor is not None:
+            attention_mask = self.flex_attention_processor(
+                batch=input_ids.shape[0],
+                q_len=query_length,
+                kv_len=key_length,
+                position_ids=position_ids,
+                document_offsets=document_offsets,
             )
 
         next_caches = []

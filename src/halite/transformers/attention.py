@@ -9,6 +9,12 @@ from torch.distributed.tensor.parallel import (
 )
 
 try:
+    from torch.nn.attention.flex_attention import flex_attention
+
+except ImportError:
+    flex_attention = None
+
+try:
     from flash_attn import flash_attn_func, flash_attn_varlen_func
     from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input
 
@@ -324,6 +330,9 @@ class Attention(nn.Module):
         )
 
         self.use_flash_attn = processor == "flash_attn"
+        self.use_flex_attention = processor == "flex"
+        if self.use_flex_attention:
+            assert flex_attention is not None, "flex attention is not available"
 
         self.n_key_value_heads = n_key_value_heads
         self.attn_drop_p = attn_drop
@@ -399,6 +408,11 @@ class Attention(nn.Module):
         if self.avail_torch:
             return self.attention_torch(
                 query, key, value, attention_mask, attention_bias, cache, use_cache
+            )
+
+        if self.use_flex_attention:
+            return self.attention_flex(
+                query, key, value, attention_mask, cache, use_cache
             )
 
         return self.attention_native(
@@ -503,6 +517,41 @@ class Attention(nn.Module):
             attention_mask,
             dropout,
             is_causal=is_causal,
+            scale=self.normalize,
+            enable_gqa=self.n_key_value_heads is not None,
+        )
+
+        return out, next_cache
+
+    def attention_flex(self, query, key, value, attention_mask, cache, use_cache):
+        # query: batch, query_length, n_head, dim
+        # key: batch, key_length, n_head, dim
+        # value: batch, key_length, n_head, dim
+        # attention_mask: batch, n_head, query_length, key_length
+
+        query = query.permute(0, 2, 1, 3)  # batch, n_head, query_length, dim
+        key = key.permute(0, 2, 1, 3)  # batch, n_head, key_length, dim
+        value = value.permute(0, 2, 1, 3)  # batch, n_head, key_length, dim
+
+        if cache is not None:
+            key = torch.cat((cache[0], key), 2)
+            value = torch.cat((cache[1], value), 2)
+
+        next_cache = None
+
+        if use_cache:
+            next_cache = (key, value)
+
+        score_mod, block_mask = attention_mask
+
+        # batch, n_head, query_length, dim
+        out = flex_attention(
+            query,
+            key,
+            value,
+            score_mod=score_mod,
+            block_mask=block_mask,
+            scale=self.normalize,
             enable_gqa=self.n_key_value_heads is not None,
         )
 
