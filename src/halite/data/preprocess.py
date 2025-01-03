@@ -146,14 +146,16 @@ class AutoregressiveSample:
 
 
 class Collator:
-    def __init__(self, keys=("text",), skip_except_keys=True):
+    def __init__(self, keys=("text",), skip_except_keys=False):
         self.keys = keys
         self.skip_except_keys = skip_except_keys
 
     def __call__(self, batch):
         collated = Record()
-        collated._batch_keys_ = self.keys
-        collated._tokenized_keys_ = batch[0]._tokenized_keys_
+        collated._meta_["batch_keys"] = self.keys
+
+        if hasattr(batch[0], "_tokenized_keys_"):
+            collated._meta_["tokenized_keys"] = batch[0]._tokenized_keys_
 
         for key in self.keys:
             collated[key] = torch.stack(
@@ -163,11 +165,16 @@ class Collator:
         if self.skip_except_keys:
             return collated
 
-        collated._meta_ = []
+        collated._meta_["samples_meta"] = []
 
         for record in batch:
             for key, val in record.items():
                 if key in self.keys or key in ("_batch_keys", "_tokenized_keys_"):
+                    continue
+
+                if key == "_meta_":
+                    collated._meta_["samples_meta"].append(val)
+
                     continue
 
                 if key not in collated:

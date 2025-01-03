@@ -116,10 +116,11 @@ def main():
 
     device = torch.device("cuda")
 
-    logger.info("building model")
+    logger.info("building the model")
 
     with torch.device("meta"):
-        model = instantiate(conf.model.model_infer)
+        model_infer = instantiate(conf.model.model_infer)(conf.model.model)
+        model = instantiate(model_infer)
 
     if conf.model.wrapper is not None:
         logger.info("applying wrapper")
@@ -161,7 +162,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--model", type=str)
-    parser.add_argument("--tasks", type=str, nargs="+")
+    parser.add_argument("--task", type=str, action="append")
     parser.add_argument("opts", default=None, nargs=argparse.REMAINDER)
 
     args = parser.parse_args()
@@ -169,7 +170,7 @@ def parse_args():
     model = Model(checkpoint_path=args.model)
     tasks = []
 
-    for task in args.tasks:
+    for task in args.task:
         task = load_config(task)
 
         for subtask in task.tasks:

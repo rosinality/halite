@@ -1,7 +1,7 @@
 from copy import deepcopy
 from functools import partial
 
-from slickconf import config_fn, call, annotate
+from slickconf import config_fn, call, annotate, patch, patch_fn, repeat
 from torch import nn
 
 from halite.nn.activation import SwiGLU
@@ -17,7 +17,6 @@ from halite.transformers.feedforward import (
 )
 from halite.transformers.position import RotaryEmbedding, apply_rotary_emb
 from halite.transformers.transformer import TransformerDecoder
-
 from halite.transformers.infer.transformer import InferTransformerDecoder
 from halite.transformers.infer.block import InferTransformerEncoderBlock
 
@@ -237,3 +236,108 @@ def transformer(
     )
 
     return transformer
+
+
+@config_fn
+def transformer_infer(
+    vocab_size,
+    dim,
+    n_heads,
+    head_dim,
+    n_layers,
+    intermediate_size,
+    context_len,
+    n_key_value_heads=None,
+    pos_embed=None,
+    pos_embed_apply_fn=None,
+    softcap=0.0,
+    rms_norm_epsilon=1e-6,
+    post_norm=False,
+    attention_processor="auto",
+    qkv_split=False,
+    gated_ff_split=False,
+    infer: str | None = None,
+):
+    if infer is None:
+        return partial(patch, patches=())
+
+    patches = [
+        patch_fn.select()
+        .instance(Attention)
+        .map_instance(
+            FlashInferAttention,
+            layer_id=0,
+            n_heads="$n_heads",
+            head_dim="$head_dim",
+            n_key_value_heads="$n_key_value_heads",
+            apply_pos_emb_fn="$apply_pos_emb_fn",
+        )
+        .chain(),
+        patch_fn.select()
+        .instance(FlashInferAttention)
+        .at("layer_id")
+        .set_sequence("$index")
+        .chain(),
+    ]
+
+    if qkv_split:
+        patches += [
+            patch_fn.select()
+            .instance(SelfAttentionQKV)
+            .map_instance(
+                InferSelfAttentionQKV,
+                q="$q",
+                k="$k",
+                v="$v",
+                attention="$attention",
+                out="$out",
+                q_init="$q_init",
+                k_init="$k_init",
+                v_init="$v_init",
+                out_init="$out_init",
+                scaler="$scaler",
+            )
+            .chain()
+        ]
+
+    else:
+        patches += [
+            patch_fn.select()
+            .instance(SelfAttention)
+            .map_instance(
+                InferSelfAttention,
+                qkv="$qkv",
+                attention="$attention",
+                out="$out",
+                qkv_split="llama",
+                qkv_init="$qkv_init",
+                out_init="$out_init",
+                scaler="$scaler",
+            )
+            .chain()
+        ]
+
+    patches += [
+        patch_fn.select()
+        .instance(TransformerEncoderBlock)
+        .map_instance(
+            InferTransformerEncoderBlock, self_attention="$self_attention", ff="$ff"
+        )
+        .chain(),
+        patch_fn.select()
+        .instance(TransformerDecoder)
+        .map_instance(
+            InferTransformerDecoder,
+            embedding="$embedding",
+            pos_embed="$pos_embed",
+            blocks="$blocks",
+            post_blocks="$post_blocks",
+            head="$head",
+            tie_embeds="$tie_embeds",
+            use_position_ids="$use_position_ids",
+            attention_processor="$attention_processor",
+        )
+        .chain(),
+    ]
+
+    return partial(patch, patches=patches)
