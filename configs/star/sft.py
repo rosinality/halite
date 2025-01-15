@@ -8,7 +8,11 @@ from halite.optim import lr_scheduler
 from halite.transformers.parallelize import parallelize
 from halite.projects.common.config import load_model
 from halite.projects.common.template import simple_format
-from halite.projects.sft.preprocess import SFTSample, SFTSequencePacking
+from halite.projects.sft.preprocess import (
+    SFTSample,
+    SFTSequencePacking,
+    collate_offsets,
+)
 
 from ..data.hendrycks_math import conf as data_conf
 
@@ -19,7 +23,7 @@ response_template = " {0}"
 conf = field()
 
 conf.model = load_model(model_checkpoint)
-conf.wrapper = partial(
+conf.parallelize = partial(
     parallelize,
     param_dtype="bfloat16",
     reduce_dtype="float32",
@@ -43,9 +47,17 @@ conf.data = field(
             prompt_tokenizer_kwargs={"bos": True, "eos": False},
             response_tokenizer_kwargs={"bos": False, "eos": True},
         ),
-        SFTSequencePacking(length=conf.model.model_conf.context_len),
+        SFTSequencePacking(
+            length=conf.model.model_conf.context_len,
+            use_position_ids=True,
+            use_document_offsets=True,
+            use_rest_of_long_sequence=False,
+        ),
     ],
-    collate_fn=preprocess.Collator(keys=("input", "target")),
+    collate_fn=preprocess.Collator(
+        keys=("input", "target", "position_ids", "document_offsets"),
+        collate_fns={"document_offsets": collate_offsets},
+    ),
 )
 
 

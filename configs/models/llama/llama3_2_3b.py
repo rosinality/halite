@@ -4,6 +4,7 @@ from slickconf import call, field, function, tag
 
 from halite.data.tokenizers.llama3 import Llama3Tokenizer
 from halite.transformers.position import Llama3RoPE, apply_rotary_emb
+from halite.transformers.parallelize import parallelize
 
 from ..transformer import transformer, transformer_infer
 from .checkpoint import weight_maps, to_halite_postprocess
@@ -42,6 +43,10 @@ conf.model = call[transformer](**transformer_config)
 conf.model_infer = call[transformer_infer](**transformer_config, infer="flashinfer")
 conf.model_conf = field(
     **transformer_config, use_complex_rope=use_complex_rope, dtype="bfloat16"
+)
+
+conf.parallelize = partial(
+    parallelize, param_dtype="bfloat16", reduce_dtype="float32", compile=True
 )
 
 conf.tokenizer = Llama3Tokenizer()
