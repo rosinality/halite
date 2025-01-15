@@ -37,7 +37,7 @@ def batch_length_to_offsets(lengths: list[int], device: str | torch.device) -> T
 
 class BatchDocumentMask:
     inputs: tuple[str] = ("document_offsets",)
-    update_mode: FlexAttentionUpdateMode = FlexAttentionUpdateMode.NEVER
+    update_mode: FlexAttentionUpdateMode = FlexAttentionUpdateMode.BATCH
     head_shared: bool = True
 
     def __init__(self, mask_mod: _mask_mod_signature):
