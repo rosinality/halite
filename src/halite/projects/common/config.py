@@ -14,6 +14,7 @@ class Model(Config):
     model: Instance | None = None
     model_infer: Instance | None = None
     tokenizer: Instance | None = None
+    parallelize: Instance | None = None
     wrapper: Instance | None = None
     policy: dict[str, Any] | None = None
     checkpoint_path: StrictStr | None = None
@@ -33,6 +34,9 @@ class Model(Config):
 
         if "tokenizer" in conf:
             self.tokenizer = Instance(conf["tokenizer"])
+
+        if "parallelize" in conf:
+            self.parallelize = Instance(conf["parallelize"])
 
         tokenizer_path = os.path.join(self.checkpoint_path, "tokenizer.model")
         if os.path.exists(tokenizer_path):
@@ -56,6 +60,9 @@ def load_model(checkpoint_path):
 
     if "tokenizer" in model_conf:
         conf.tokenizer = model_conf["tokenizer"]
+
+    if "parallelize" in model_conf:
+        conf.parallelize = model_conf["parallelize"]
 
     tokenizer_path = os.path.join(checkpoint_path, "tokenizer.model")
     if os.path.exists(tokenizer_path):

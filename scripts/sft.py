@@ -256,6 +256,14 @@ def main():
         model = instantiate(conf.model.wrapper)(
             model=model, mesh=mesh, parallel_dims=pdims
         )
+
+    if conf.model.parallelize is not None:
+        logger.info("applying parallelize")
+        model = instantiate(conf.model.parallelize)(
+            model=model, mesh=mesh, parallel_dims=pdims
+        )
+
+    if conf.model.wrapper is not None or conf.model.parallelize is not None:
         logger.info(str(model))
 
     model.to_empty(device=device)
