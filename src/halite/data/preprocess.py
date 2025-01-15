@@ -1,5 +1,6 @@
+import itertools
 from dataclasses import dataclass
-
+from typing import Callable
 import orjson
 import torch
 
@@ -90,47 +91,52 @@ class SequencePacking:
         self.length = length
         self.key = key
 
+        self._start = 0
+        self._packed_ids = []
+        self._packed_dataset_ids = []
+        self._packed_sample_ids = []
+        self._tokens = []
+
+    def load_state_dict(self, state_dict):
+        self._tokens = state_dict["tokens"]
+        self._packed_dataset_ids = state_dict["packed_dataset_ids"]
+        self._packed_sample_ids = state_dict["packed_sample_ids"]
+
+    def state_dict(self):
+        return {
+            "tokens": self._tokens.copy(),
+            "packed_dataset_ids": self._packed_dataset_ids.copy(),
+            "packed_sample_ids": self._packed_sample_ids.copy(),
+        }
+
     def __call__(self, iterator):
-        packed_ids = []
-        packed_dataset_ids = []
-        packed_sample_ids = []
-
         for input_record in iterator:
-            start = 0
-            while start < len(input_record[self.key]):
-                rem_data = input_record[self.key][start:]
+            self._tokens.extend(input_record[self.key])
 
-                if len(packed_ids) + len(rem_data) < self.length:
-                    packed_ids.extend(rem_data)  # use rest of example, move-on
-                    packed_dataset_ids.append(input_record._meta_["dataset_id"])
-                    packed_sample_ids.append(input_record._meta_["sample_id"])
+            self._packed_dataset_ids.append(input_record["_meta_"]["dataset_id"])
+            self._packed_sample_ids.append(input_record["_meta_"]["sample_id"])
 
-                    break
+            while len(self._tokens) >= self.length:
+                packed_ids = self._tokens[: self.length]
+                self._tokens = self._tokens[self.length :]
 
-                else:
-                    take = self.length - len(packed_ids)
-                    packed_ids.extend(rem_data[:take])
-                    packed_dataset_ids.append(input_record._meta_["dataset_id"])
-                    packed_sample_ids.append(input_record._meta_["sample_id"])
+                packed_record = {**input_record, self.key: packed_ids}
+                packed_record["_meta_"].update(
+                    {
+                        "dataset_ids": self._packed_dataset_ids,
+                        "sample_ids": self._packed_sample_ids,
+                    }
+                )
+                packed_record = Record(packed_record)
 
-                    packed_record = {**input_record, self.key: packed_ids}
-                    packed_record["_meta_"].update(
-                        {
-                            "dataset_ids": packed_dataset_ids,
-                            "sample_ids": packed_sample_ids,
-                        }
-                    )
-                    packed_record = Record(packed_record)
+                # self._packed_dataset_ids = self._packed_dataset_ids[-1:]
+                # self._packed_sample_ids = self._packed_sample_ids[-1:]
 
-                    yield packed_record
+                yield packed_record
 
-                    start += take
-                    packed_ids = []
-                    packed_dataset_ids = []
-                    packed_sample_ids = []
-
-                    # Drop remainder for simplicity.
-                    # We lose the rest of the example on restore.
+            if len(self._tokens) == 0:
+                self._packed_dataset_ids = []
+                self._packed_sample_ids = []
 
 
 class AutoregressiveSample:
@@ -146,9 +152,18 @@ class AutoregressiveSample:
 
 
 class Collator:
-    def __init__(self, keys=("text",), skip_except_keys=False):
+    def __init__(
+        self,
+        keys=("text",),
+        skip_except_keys=False,
+        collate_fns: dict[str, Callable] = None,
+    ):
         self.keys = keys
         self.skip_except_keys = skip_except_keys
+
+        self.collate_fns = {}
+        if collate_fns is not None:
+            self.collate_fns = collate_fns
 
     def __call__(self, batch):
         collated = Record()
@@ -158,9 +173,13 @@ class Collator:
             collated._meta_["tokenized_keys"] = batch[0]._tokenized_keys_
 
         for key in self.keys:
-            collated[key] = torch.stack(
-                [torch.as_tensor(record[key]) for record in batch], 0
-            )
+            if key in self.collate_fns:
+                collated[key] = self.collate_fns[key]([record[key] for record in batch])
+
+            else:
+                collated[key] = torch.stack(
+                    [torch.as_tensor(record[key]) for record in batch], 0
+                )
 
         if self.skip_except_keys:
             return collated

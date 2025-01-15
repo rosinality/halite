@@ -66,6 +66,33 @@ class SFTSample:
         return record
 
 
+def length_to_offsets(lengths: list[int]) -> torch.Tensor:
+    """Converts a list of lengths to a list of offsets.
+
+    Args:
+        lengths: A list of lengths.
+
+    """
+
+    offsets = [0]
+    offsets.extend(lengths)
+    offsets = torch.tensor(offsets, dtype=torch.int32)
+    offsets = torch.cumsum(offsets, dim=-1)
+
+    return offsets
+
+
+def collate_offsets(offsets: list[torch.Tensor]) -> torch.Tensor:
+    max_len = max([len(offset) for offset in offsets])
+    batch = torch.zeros((len(offsets), max_len), dtype=torch.int32)
+
+    for i, offset in enumerate(offsets):
+        batch[i, : len(offset)] = offset
+        batch[i, len(offset) :] = offset[-1]
+
+    return batch
+
+
 class SFTSequencePacking:
     def __init__(
         self,
@@ -74,12 +101,92 @@ class SFTSequencePacking:
         target_key="target",
         input_pad=0,
         target_pad=-100,
+        use_position_ids=False,
+        use_document_offsets=False,
+        use_rest_of_long_sequence=False,
     ):
         self.length = length
         self.input_key = input_key
         self.target_key = target_key
         self.input_pad = input_pad
         self.target_pad = target_pad
+
+        self.use_position_ids = use_position_ids
+        self.use_document_offsets = use_document_offsets
+        self.use_rest_of_long_sequence = use_rest_of_long_sequence
+
+    def _pack_record(
+        self,
+        record,
+        packed_input_ids,
+        packed_target_ids,
+        packed_dataset_ids,
+        packed_sample_ids,
+    ):
+        packed_record = {
+            **record,
+            self.input_key: torch.cat(packed_input_ids),
+            self.target_key: torch.cat(packed_target_ids),
+            "_tokenized_keys_": (self.input_key, self.target_key),
+        }
+
+        if self.use_document_offsets:
+            document_offsets = length_to_offsets(
+                [len(sample) for sample in packed_input_ids]
+            )
+            packed_record["document_offsets"] = document_offsets
+
+        if self.use_position_ids:
+            position_ids = torch.cat(
+                [torch.arange(len(sample)) for sample in packed_input_ids]
+            )
+            packed_record["position_ids"] = position_ids
+
+        packed_record["_meta_"].update(
+            {
+                "dataset_ids": packed_dataset_ids,
+                "sample_ids": packed_sample_ids,
+            }
+        )
+
+        return Record(packed_record)
+
+    def _split_long_sequence(self, record):
+        input_ids = record[self.input_key]
+        target_ids = record[self.target_key]
+        splitted = False
+        while len(input_ids) > self.length:
+            packed_input_ids = [input_ids[: self.length]]
+            packed_target_ids = [target_ids[: self.length]]
+            packed_dataset_ids = [record._meta_["dataset_id"]]
+            packed_sample_ids = [record._meta_["sample_id"]]
+
+            yield (
+                (
+                    packed_input_ids,
+                    packed_target_ids,
+                    packed_dataset_ids,
+                    packed_sample_ids,
+                    self.length,
+                ),
+                True,
+            )
+
+            input_ids = input_ids[self.length :]
+            target_ids = target_ids[self.length :]
+            splitted = True
+
+        if not splitted or (splitted and self.use_rest_of_long_sequence):
+            yield (
+                (
+                    [input_ids],
+                    [target_ids],
+                    [record._meta_["dataset_id"]],
+                    [record._meta_["sample_id"]],
+                    len(input_ids),
+                ),
+                False,
+            )
 
     def __call__(self, iterator):
         packed_input_ids = []
@@ -100,30 +207,35 @@ class SFTSequencePacking:
                 packed_dataset_ids.append(record._meta_["dataset_id"])
                 packed_sample_ids.append(record._meta_["sample_id"])
 
-            else:
+                continue
+
+            if packed_len > 0:
                 pad = self.length - packed_len
                 packed_input_ids.append(torch.full((pad,), self.input_pad, dtype=dtype))
                 packed_target_ids.append(
                     torch.full((pad,), self.target_pad, dtype=dtype)
                 )
-                packed_record = {
-                    **record,
-                    self.input_key: torch.cat(packed_input_ids),
-                    self.target_key: torch.cat(packed_target_ids),
-                    "_tokenized_keys_": (self.input_key, self.target_key),
-                }
-                packed_record["_meta_"].update(
-                    {
-                        "dataset_ids": packed_dataset_ids,
-                        "sample_ids": packed_sample_ids,
-                    }
+
+                yield self._pack_record(
+                    record,
+                    packed_input_ids,
+                    packed_target_ids,
+                    packed_dataset_ids,
+                    packed_sample_ids,
                 )
-                packed_record = Record(packed_record)
 
-                yield packed_record
-
-                packed_input_ids = [record[self.input_key]]
-                packed_len = len(record[self.input_key])
-                packed_target_ids = [record[self.target_key]]
-                packed_dataset_ids = [record._meta_["dataset_id"]]
-                packed_sample_ids = [record._meta_["sample_id"]]
+            for (
+                packed_input_ids,
+                packed_target_ids,
+                packed_dataset_ids,
+                packed_sample_ids,
+                packed_len,
+            ), is_packed in self._split_long_sequence(record):
+                if is_packed:
+                    yield self._pack_record(
+                        record,
+                        packed_input_ids,
+                        packed_target_ids,
+                        packed_dataset_ids,
+                        packed_sample_ids,
+                    )

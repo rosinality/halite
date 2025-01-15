@@ -142,6 +142,9 @@ class WeightedIterableDataset(data.IterableDataset):
         self.operations = [] if operations is None else operations
         self.seed = seed
 
+        self._current_id = None
+        self._sample_states = {}
+
     def __len__(self):
         return self.points[-1]
 
@@ -195,7 +198,7 @@ class WeightedIterableDataset(data.IterableDataset):
 
         self.set_worker_state(worker_info)
 
-        return iter(self.iterator())
+        return self.iterator()
 
     def set_worker_state(self, worker_info):
         if worker_info is None:
@@ -214,7 +217,6 @@ class WeightedIterableDataset(data.IterableDataset):
             "start": start,
             "end": end,
             "step": step,
-            "current_id": start,
             "worker_id": offset,
             "num_workers": step,
             "dp_rank": self.rank,
@@ -222,7 +224,24 @@ class WeightedIterableDataset(data.IterableDataset):
             "seed": self.seed,
         }
 
-    def iterator(self):
+        if self._current_id is None:
+            self._current_id = start
+
+    def load_state_dict(self, state_dict):
+        self._current_id = state_dict["current_id"]
+        self._sample_states = state_dict["sample_states"]
+
+        for op_id, op in enumerate(self.operations):
+            if op_id in self._sample_states:
+                op.load_state_dict(self._sample_states[op_id])
+
+    def state_dict(self):
+        return {
+            "current_id": self._current_id,
+            "sample_states": self._sample_states,
+        }
+
+    def _iterator(self):
         data = self.sample_iterator()
 
         for op in self.operations:
@@ -230,14 +249,22 @@ class WeightedIterableDataset(data.IterableDataset):
 
         return data
 
+    def iterator(self):
+        for sample in self._iterator():
+            for op_id, op in enumerate(self.operations):
+                if hasattr(op, "state_dict"):
+                    self._sample_states[op_id] = op.state_dict()
+
+            yield sample
+
     def sample_iterator(self):
         for idx in range(
-            self.worker_state["start"],
+            self._current_id,
             self.worker_state["end"],
             self.worker_state["step"],
         ):
             record = self[idx]
-            self.worker_state["current_id"] += self.worker_state["step"]
-            record._meta_["worker_state"] = self.worker_state
+
+            self._current_id = idx + self.worker_state["step"]
 
             yield record
