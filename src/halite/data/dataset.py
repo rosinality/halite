@@ -118,6 +118,7 @@ class WeightedIterableDataset(data.IterableDataset):
         num_replicas=1,
         rank=0,
         upsample=False,
+        shuffle=True,
         seed=42,
     ):
         self.num_replicas = num_replicas
@@ -140,6 +141,7 @@ class WeightedIterableDataset(data.IterableDataset):
         self.target_sample = torch.round(target_sample).to(torch.int64)
         self.points = torch.cumsum(self.target_sample, 0).tolist()
         self.operations = [] if operations is None else operations
+        self.shuffle = shuffle
         self.seed = seed
 
         self._current_id = None
@@ -170,7 +172,9 @@ class WeightedIterableDataset(data.IterableDataset):
         return "\n".join(res)
 
     def __getitem__(self, idx):
-        idx = index_shuffle(idx, len(self) - 1, self.seed, 4)
+        if self.shuffle:
+            idx = index_shuffle(idx, len(self) - 1, self.seed, 4)
+
         dataset_idx = bisect.bisect_right(self.points, idx)
         dataset = self.datasets[dataset_idx]
 
