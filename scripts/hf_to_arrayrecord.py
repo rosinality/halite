@@ -80,7 +80,7 @@ def write_arrayrecord(
             filename = f"{split}-{{i}}-of-{n_shards}.arrayrecord"
 
         else:
-            filename = f"{split}-{{i}}-of-{n_shards}.arrayrecord"
+            filename = f"{name}-{split}-{{i}}-of-{n_shards}.arrayrecord"
 
         shard_names = [filename.format(i=i + 1) for i in range(n_shards)]
         shard_writer = [
@@ -117,18 +117,7 @@ def write_arrayrecord(
 
         dataset_conf[split] = split_conf
 
-    if len(splits) == 1:
-        dataset_conf = dataset_conf[splits[0]]
-        render_fn = get_render_fn(TEMPLATE_NO_SPLITS, filters={"pformat": pformat_dict})
-
-    else:
-        render_fn = get_render_fn(TEMPLATE_SPLITS, filters={"pformat": pformat_dict})
-
-    with open(os.path.join(output_path, dataset_name, "dataset.py"), "w") as f:
-        f.write(render_fn(dataset=dataset_conf))
-
-    with open(os.path.join(output_path, dataset_name, "dataset.json"), "wb") as f:
-        f.write(orjson.dumps(dataset_conf, option=orjson.OPT_INDENT_2))
+    return dataset_conf
 
 
 if __name__ == "__main__":
@@ -162,9 +151,11 @@ if __name__ == "__main__":
 
     os.makedirs(args.output, exist_ok=True)
 
+    dataset_conf = None
+
     for name, dset in tqdm(zip(names, dsets)):
         print(args.dataset, name, len(dset))
-        write_arrayrecord(
+        dset_conf = write_arrayrecord(
             dset,
             args.dataset,
             name,
@@ -173,3 +164,26 @@ if __name__ == "__main__":
             args.n_shards,
             args.output,
         )
+
+        if dataset_conf is None:
+            dataset_conf = dset_conf
+
+        else:
+            for split, conf in dataset_conf.items():
+                for dataset_name, shard_conf in conf["shards"].items():
+                    shard_conf.update(dset_conf[split]["shards"][dataset_name])
+
+    if len(dataset_conf) == 1:
+        dataset_conf = dataset_conf[next(dataset_conf.keys())]
+        render_fn = get_render_fn(TEMPLATE_NO_SPLITS, filters={"pformat": pformat_dict})
+
+    else:
+        render_fn = get_render_fn(TEMPLATE_SPLITS, filters={"pformat": pformat_dict})
+
+    dataset_name = dataset_name.replace("/", "_")
+
+    with open(os.path.join(args.output, dataset_name, "dataset.py"), "w") as f:
+        f.write(render_fn(dataset=dataset_conf))
+
+    with open(os.path.join(args.output, dataset_name, "dataset.json"), "wb") as f:
+        f.write(orjson.dumps(dataset_conf, option=orjson.OPT_INDENT_2))
