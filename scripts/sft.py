@@ -1,10 +1,6 @@
-import os
-
 import torch
-import torch.distributed.checkpoint as dcp
-from torch.distributed.checkpoint.state_dict import get_model_state_dict
 from torch import nn
-from torch.utils.data import DataLoader
+from torch import distributed as dist
 from slickconf import instantiate, load_arg_config, summarize
 
 try:
@@ -13,8 +9,12 @@ try:
 except ImportError:
     wandb = None
 
-from halite.distributed import all_reduce_mean, all_reduce_flag
-from halite.data.dataloader import DataManager
+from halite.distributed import (
+    all_reduce_mean,
+    load_checkpoint,
+    CheckpointManager,
+)
+from halite.data.dataloader import DataLoader, DataManager
 from halite.data.dataset import build_dataset_from_spec, WeightedIterableDataset
 from halite.logging import get_logger
 from halite.parallel import ParallelDims
@@ -30,6 +30,7 @@ def train(
     scheduler,
     train_loader,
     eval_loader,
+    checkpoint_manager,
     device,
     epoch,
     global_step,
@@ -51,6 +52,8 @@ def train(
 
     loader = iter(DataManager(train_loader, parallel_dims.mesh))
 
+    train_step_fn = instantiate(conf.training.train_step_fn)
+
     step = 0
     while True:
         try:
@@ -61,25 +64,8 @@ def train(
 
         optimizer.zero_grad()
         batch = batch.to(device)
-        labels = batch.pop("target")
-        out = model(batch["input"])
-        loss, loss_dict = criterion(out.logits, labels)
 
-        if out.aux_outputs is not None:
-            for aux_out in out.aux_outputs:
-                if aux_out is None:
-                    continue
-
-                for aux_key, aux_val in aux_out.items():
-                    if aux_key not in loss_dict:
-                        loss_dict[aux_key] = aux_val.detach()
-
-                    else:
-                        loss_dict[aux_key] += aux_val.detach()
-
-                    loss += aux_val
-
-        del out
+        loss, loss_dict = train_step_fn(batch, model, criterion)
 
         loss.backward()
 
@@ -131,6 +117,8 @@ def train(
         if conf.training.max_iter is not None and global_step >= conf.training.max_iter:
             break
 
+        checkpoint_manager.save(global_step)
+
     model.train(is_train)
 
     return step
@@ -145,8 +133,17 @@ def evaluate(conf, model, criterion, eval_loader, device, parallel_dims, logger)
 
     step = 0
 
-    loader = iter(DataManager(eval_loader, parallel_dims.mesh))
+    data_manager = DataManager(eval_loader, parallel_dims.mesh)
+    loader = iter(data_manager)
     losses_sum = {}
+    total_targets = 0
+    use_micro_average = False
+
+    if conf.training.eval_step_fn is None:
+        eval_step_fn = instantiate(conf.training.train_step_fn)
+
+    else:
+        eval_step_fn = instantiate(conf.training.eval_step_fn)
 
     while True:
         try:
@@ -158,44 +155,49 @@ def evaluate(conf, model, criterion, eval_loader, device, parallel_dims, logger)
         step += 1
 
         batch = batch.to(device)
-        labels = batch.pop("target")
-        out = model(batch["input"])
-        loss, loss_dict = criterion(out.logits, labels)
-
-        if out.aux_outputs is not None:
-            for aux_out in out.aux_outputs:
-                if aux_out is None:
-                    continue
-
-                for aux_key, aux_val in aux_out.items():
-                    if aux_key not in loss_dict:
-                        loss_dict[aux_key] = aux_val.detach()
-
-                    else:
-                        loss_dict[aux_key] += aux_val.detach()
-
-                    loss += aux_val
+        loss, loss_dict = eval_step_fn(batch, model, criterion)
 
         if parallel_dims.is_primary and step % conf.output.log_step == 0:
             logger.info(f"evaluating [{step}/{length}]; loss: {loss.item():.5f}")
 
+        n_targets = loss_dict.get("n_targets", 1)
+
+        if n_targets.item() == 1:
+            torch.save(batch, f"batch_{step}.pt")
+
+        total_targets += n_targets
+        if "n_targets" in loss_dict:
+            use_micro_average = True
+
         for key, val in loss_dict.items():
+            if key == "n_targets":
+                continue
+
             val = val.float()
 
             if key not in losses_sum:
-                losses_sum[key] = val
+                losses_sum[key] = val * n_targets
 
             else:
-                losses_sum[key] += val
+                losses_sum[key] += val * n_targets
 
-    losses_sum = {k: v / step for k, v in losses_sum.items()}
+    if use_micro_average:
+        total_targets = torch.as_tensor(total_targets, device=device)
+        dist.all_reduce(total_targets, group=parallel_dims.mesh.get_group("dp"))
+        total_targets = total_targets.item()
+        losses_sum = {k: v / total_targets for k, v in losses_sum.items()}
+        total_targets = 1
+
+    else:
+        losses_sum = {k: v / step for k, v in losses_sum.items()}
+        total_targets = parallel_dims.dp
 
     try:
         for key, val in losses_sum.items():
             val = all_reduce_mean(
                 val,
                 parallel_dims.mesh.get_group("dp"),
-                parallel_dims.dp,
+                total_targets,
             )
 
             losses_sum[key] = val
@@ -267,11 +269,9 @@ def main():
         logger.info(str(model))
 
     model.to_empty(device=device)
-    model.init_weights(device)
 
-    if conf.training.gradient_checkpointing:
-        logger.info("use gradient checkpointing")
-        model.gradient_checkpointing_enable(1)
+    if conf.model.checkpoint_path is not None:
+        load_checkpoint(conf.model.checkpoint_path, model_parts=model)
 
     criterion = instantiate(conf.training.criterion)
     optimizer = instantiate(conf.training.optimizer)(
@@ -279,7 +279,6 @@ def main():
     )
     scheduler = instantiate(conf.training.scheduler)(
         optimizer=optimizer,
-        n_iter=conf.training.max_iter,
     )
 
     train_source, train_ratios, train_names = build_dataset_from_spec(
@@ -322,25 +321,32 @@ def main():
         train_dset,
         batch_size=conf.training.train_batch_size // pdims.dp,
         collate_fn=collate_fn,
-        num_workers=2,
+        num_workers=4,
+        rank=mesh.get_local_rank("dp"),
     )
     eval_loader = DataLoader(
         eval_dset,
         batch_size=conf.training.eval_batch_size // pdims.dp,
         collate_fn=collate_fn,
         num_workers=4,
+        rank=mesh.get_local_rank("dp"),
     )
 
     logger.info("evaluating baseline")
     eval_loss = evaluate(conf, model, criterion, eval_loader, device, pdims, logger)
     logging_loss(eval_loss, 0, pdims, logger)
 
-    dcp.save(
-        get_model_state_dict(model),
-        checkpoint_id=os.path.join(conf.output.output_dir, "step-0"),
-    )
-
     logger.info("start training")
+
+    checkpoint_manager = CheckpointManager(
+        model,
+        optimizer,
+        scheduler,
+        train_loader,
+        model_config=conf.model,
+        directory=conf.output.output_dir,
+        interval=conf.output.save_step,
+    )
 
     global_step = 0
 
@@ -355,6 +361,7 @@ def main():
             scheduler,
             train_loader,
             eval_loader,
+            checkpoint_manager,
             device,
             epoch,
             global_step,
@@ -366,10 +373,7 @@ def main():
     eval_loss = evaluate(conf, model, criterion, eval_loader, device, pdims, logger)
     logging_loss(eval_loss, global_step, pdims, logger)
 
-    dcp.save(
-        get_model_state_dict(model),
-        checkpoint_id=os.path.join(conf.output.output_dir, f"step-{global_step}"),
-    )
+    checkpoint_manager.save(global_step)
 
 
 if __name__ == "__main__":
