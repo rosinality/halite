@@ -1,7 +1,7 @@
 from copy import deepcopy
 from functools import partial
 
-from slickconf import config_fn, call, annotate, patch, patch_fn, repeat
+from slickconf import config_fn, call, annotate, patch, patch_fn, select
 from torch import nn
 
 from halite.nn.activation import SwiGLU
@@ -341,3 +341,10 @@ def transformer_infer(
     ]
 
     return partial(patch, patches=patches)
+
+
+@config_fn
+def use_flex_attention(model_conf):
+    conf = select(model_conf).instance(Attention).update_dict(dict(processor="flex"))
+
+    return conf

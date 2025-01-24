@@ -1,7 +1,6 @@
 from enum import Enum
 
-
-class FlexAttentionUpdateMode(Enum):
-    NEVER = "never"
-    BATCH = "batch"
-    LAYER = "layer"
+from halite.transformers.flex_attention.flex_attention import (
+    FlexAttentionProcessor,
+    FlexAttentionUpdateMode,
+)

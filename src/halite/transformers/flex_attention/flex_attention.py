@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Callable, NamedTuple
 
 from torch import nn
@@ -6,7 +7,11 @@ from torch.nn.attention.flex_attention import (
     create_block_mask,
 )
 
-from halite.transformers.flex_attention import FlexAttentionUpdateMode
+
+class FlexAttentionUpdateMode(Enum):
+    NEVER = "never"
+    BATCH = "batch"
+    LAYER = "layer"
 
 
 class FlexAttentionInput(NamedTuple):
