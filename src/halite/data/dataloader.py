@@ -4,18 +4,24 @@ from typing import Callable, Iterable
 import torch
 from torch import distributed as dist
 from torch.utils.data import Dataset, Sampler
-from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.checkpoint.stateful import Stateful
+import torch.distributed._functional_collectives as funcol
+import torch.distributed.distributed_c10d as c10d
 from torchdata.stateful_dataloader import StatefulDataLoader
 
 from halite.logging import logger
 
 
+def _all_reduce(tensor, reduce_op, group):
+    return funcol.all_reduce(tensor, reduce_op, group).item()
+
+
 class DataManager:
-    def __init__(self, loader, mesh, device="cuda"):
+    def __init__(self, loader, mesh, check_finished=True):
         self.loader = loader
-        self.mesh = mesh
-        self.finished = torch.tensor(0, dtype=torch.float32, device=device)
+        self.pg = mesh.get_group("dp")
+        self.check_finished = check_finished
+        self.finished = torch.tensor(0, dtype=torch.float32, device="cuda")
 
     def __iter__(self):
         self.loader_iter = iter(self.loader)
@@ -32,11 +38,15 @@ class DataManager:
         else:
             finished = False
 
+        if not self.check_finished:
+            return batch
+
+        # self.finished = self.finished.to("cuda")
         self.finished.fill_(float(finished))
-        dist.all_reduce(
-            self.finished, group=self.mesh.get_group("dp"), op=dist.ReduceOp.MAX
-        )
-        finished = self.finished.item() > 0
+        # dist.all_reduce(self.finished, group=self.pg, op=dist.ReduceOp.MAX)
+        finished = _all_reduce(self.finished, c10d.ReduceOp.MAX.name, self.pg)
+        # self.finished = self.finished.cpu()
+        finished = finished > 0
 
         if finished:
             raise StopIteration
@@ -53,8 +63,6 @@ class DataLoader(StatefulDataLoader, Stateful):
         sampler: Sampler | Iterable | None = None,
         batch_sampler: Sampler[list] | Iterable[list] | None = None,
         rank: int = 0,
-        mesh: DeviceMesh | None = None,
-        check_finished: bool = True,
         num_workers: int = 0,
         collate_fn: Callable | None = None,
         pin_memory: bool = False,
@@ -91,8 +99,6 @@ class DataLoader(StatefulDataLoader, Stateful):
 
         self._rank = rank
         self._rank_id = f"dp_rank_{rank}"
-        self._mesh = mesh
-        self._check_finished = check_finished
 
     def state_dict(self):
         return {self._rank_id: pickle.dumps(super().state_dict())}
@@ -107,27 +113,3 @@ class DataLoader(StatefulDataLoader, Stateful):
             return
 
         super().load_state_dict(pickle.loads(state_dict[self._rank_id]))
-
-    def __next__(self):
-        try:
-            batch = next(self.loader_iter)
-
-        except StopIteration:
-            finished = True
-
-        else:
-            finished = False
-
-        if not self._check_finished:
-            return batch
-
-        self.finished.fill_(float(finished))
-        dist.all_reduce(
-            self.finished, group=self._mesh.get_group("dp"), op=dist.ReduceOp.MAX
-        )
-        finished = self.finished.item() > 0
-
-        if finished:
-            raise StopIteration
-
-        return batch
