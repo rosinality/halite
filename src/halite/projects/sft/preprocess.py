@@ -82,8 +82,7 @@ def length_to_offsets(lengths: list[int]) -> torch.Tensor:
     return offsets
 
 
-def collate_offsets(offsets: list[torch.Tensor]) -> torch.Tensor:
-    max_len = max([len(offset) for offset in offsets])
+def collate_offsets(offsets: list[torch.Tensor], max_len: int) -> torch.Tensor:
     batch = torch.zeros((len(offsets), max_len), dtype=torch.int32)
 
     for i, offset in enumerate(offsets):
@@ -114,6 +113,30 @@ class SFTSequencePacking:
         self.use_position_ids = use_position_ids
         self.use_document_offsets = use_document_offsets
         self.use_rest_of_long_sequence = use_rest_of_long_sequence
+
+        self._input_ids = []
+        self._target_ids = []
+        self._dataset_ids = []
+        self._sample_ids = []
+
+        self._input_ids = []
+        self._target_ids = []
+        self._dataset_ids = []
+        self._sample_ids = []
+
+    def load_state_dict(self, state_dict):
+        self._input_ids = state_dict["input_ids"]
+        self._target_ids = state_dict["target_ids"]
+        self._dataset_ids = state_dict["dataset_ids"]
+        self._sample_ids = state_dict["sample_ids"]
+
+    def state_dict(self):
+        return {
+            "input_ids": self._input_ids.copy(),
+            "target_ids": self._target_ids.copy(),
+            "dataset_ids": self._dataset_ids.copy(),
+            "sample_ids": self._sample_ids.copy(),
+        }
 
     def _pack_record(
         self,
@@ -151,72 +174,88 @@ class SFTSequencePacking:
 
         return Record(packed_record)
 
-    def _split_long_sequence(self, record):
-        input_ids = record[self.input_key]
-        target_ids = record[self.target_key]
-        splitted = False
-        while len(input_ids) > self.length:
-            packed_input_ids = [input_ids[: self.length]]
-            packed_target_ids = [target_ids[: self.length]]
-            packed_dataset_ids = [record._meta_["dataset_id"]]
-            packed_sample_ids = [record._meta_["sample_id"]]
+    def get_padded_slice(self, input_lists, pad_value, *ids_lists):
+        buffer = []
+        buffer_ids = []
+        for _ in range(len(ids_lists)):
+            buffer_ids.append([])
 
-            yield (
-                (
-                    packed_input_ids,
-                    packed_target_ids,
-                    packed_dataset_ids,
-                    packed_sample_ids,
-                    self.length,
-                ),
-                True,
-            )
+        current_len = 0
 
-            input_ids = input_ids[self.length :]
-            target_ids = target_ids[self.length :]
-            splitted = True
+        for i, input in enumerate(input_lists):
+            dtype = input.dtype
+            input_len = len(input)
 
-        if not splitted or (splitted and self.use_rest_of_long_sequence):
-            yield (
-                (
-                    [input_ids],
-                    [target_ids],
-                    [record._meta_["dataset_id"]],
-                    [record._meta_["sample_id"]],
-                    len(input_ids),
-                ),
-                False,
-            )
+            if current_len + input_len <= self.length:
+                buffer.append(input)
+                current_len += input_len
 
-    def __call__(self, iterator):
-        packed_input_ids = []
-        packed_len = 0
-        packed_target_ids = []
-        packed_dataset_ids = []
-        packed_sample_ids = []
+                for j, ids in enumerate(ids_lists):
+                    buffer_ids[j].append(ids[i])
 
-        for record in iterator:
-            current_len = packed_len + len(record[self.input_key])
+            elif current_len > 0:
+                pad = self.length - current_len
+                buffer.append(torch.full((pad,), pad_value, dtype=dtype))
 
-            dtype = record[self.input_key].dtype
+                for j, ids in enumerate(ids_lists):
+                    buffer_ids[j].append(ids[i])
 
-            if current_len <= self.length:
-                packed_input_ids.append(record[self.input_key])
-                packed_len += len(record[self.input_key])
-                packed_target_ids.append(record[self.target_key])
-                packed_dataset_ids.append(record._meta_["dataset_id"])
-                packed_sample_ids.append(record._meta_["sample_id"])
-
-                continue
-
-            if packed_len > 0:
-                pad = self.length - packed_len
-                packed_input_ids.append(torch.full((pad,), self.input_pad, dtype=dtype))
-                packed_target_ids.append(
-                    torch.full((pad,), self.target_pad, dtype=dtype)
+                return (
+                    buffer,
+                    input_lists[i:],
+                    buffer_ids,
+                    [ids[i:] for ids in ids_lists],
                 )
 
-                yield self._pack_record(
+            else:
+                buffer.append(input[:input_len])
+
+                for j, ids in enumerate(ids_lists):
+                    buffer_ids[j].append(ids[i])
+
+                if self.use_rest_of_long_sequence:
+                    return (
+                        buffer,
+                        [input[input_len:]] + input_lists[i + 1 :],
+                        buffer_ids,
+                        [[ids[i]] + ids[i + 1 :] for ids in ids_lists],
+                    )
+
+                else:
+                    return (
+                        buffer,
+                        input_lists[i + 1 :],
+                        buffer_ids,
+                        [ids[i + 1 :] for ids in ids_lists],
+                    )
+
+        return None, input_lists, [None for _ in range(len(ids_lists))], ids_lists
+
+    def __call__(self, iterator):
+        for record in iterator:
+            self._input_ids.append(record[self.input_key])
+            self._target_ids.append(record[self.target_key])
+            self._dataset_ids.append(record["_meta_"]["dataset_id"])
+            self._sample_ids.append(record["_meta_"]["sample_id"])
+
+            while True:
+                (
+                    packed_input_ids,
+                    self._input_ids,
+                    (packed_dataset_ids, packed_sample_ids),
+                    (self._dataset_ids, self._sample_ids),
+                ) = self.get_padded_slice(
+                    self._input_ids, self.input_pad, self._dataset_ids, self._sample_ids
+                )
+
+                if packed_input_ids is None:
+                    break
+
+                packed_target_ids, self._target_ids, _, _ = self.get_padded_slice(
+                    self._target_ids, self.target_pad
+                )
+
+                packed_record = self._pack_record(
                     record,
                     packed_input_ids,
                     packed_target_ids,
@@ -224,18 +263,34 @@ class SFTSequencePacking:
                     packed_sample_ids,
                 )
 
-            for (
-                packed_input_ids,
-                packed_target_ids,
-                packed_dataset_ids,
-                packed_sample_ids,
-                packed_len,
-            ), is_packed in self._split_long_sequence(record):
-                if is_packed:
-                    yield self._pack_record(
-                        record,
-                        packed_input_ids,
-                        packed_target_ids,
-                        packed_dataset_ids,
-                        packed_sample_ids,
-                    )
+                yield packed_record
+
+            if len(self._input_ids) == 0:
+                self._dataset_ids = []
+                self._sample_ids = []
+
+        if len(self._input_ids) > 0:
+            current_len = sum(len(input) for input in self._input_ids)
+            pad_len = self.length - current_len
+
+            self._input_ids.append(
+                torch.full((pad_len,), self.input_pad, dtype=torch.int64)
+            )
+            self._target_ids.append(
+                torch.full((pad_len,), self.target_pad, dtype=torch.int64)
+            )
+
+            packed_record = self._pack_record(
+                record,
+                self._input_ids,
+                self._target_ids,
+                self._dataset_ids,
+                self._sample_ids,
+            )
+
+            self._input_ids = []
+            self._target_ids = []
+            self._dataset_ids = []
+            self._sample_ids = []
+
+            yield packed_record
