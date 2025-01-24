@@ -1,7 +1,9 @@
 import itertools
 from dataclasses import dataclass
 from typing import Callable
+
 import orjson
+from slickconf import Instance
 import torch
 
 from halite.data.record import Record
@@ -129,8 +131,8 @@ class SequencePacking:
                 )
                 packed_record = Record(packed_record)
 
-                # self._packed_dataset_ids = self._packed_dataset_ids[-1:]
-                # self._packed_sample_ids = self._packed_sample_ids[-1:]
+                self._packed_dataset_ids = self._packed_dataset_ids[-1:]
+                self._packed_sample_ids = self._packed_sample_ids[-1:]
 
                 yield packed_record
 
