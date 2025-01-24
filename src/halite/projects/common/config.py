@@ -1,6 +1,8 @@
 import copy
+import dataclasses
 import os
 import json
+import shutil
 from typing import Any
 
 from pydantic import StrictBool, StrictInt, StrictStr
@@ -21,6 +23,9 @@ class Model(Config):
 
     def model_post_init(self, __context):
         if self.checkpoint_path is None:
+            return
+
+        if self.model is not None:
             return
 
         with open(os.path.join(self.checkpoint_path, "config.json"), "r") as f:
@@ -44,6 +49,9 @@ class Model(Config):
 
         if "model_conf" in conf:
             self.model_conf = TransformerConfig(**conf["model_conf"])
+
+    def save(self, checkpoint_path):
+        save_model(self, checkpoint_path)
 
 
 @exempt
@@ -71,7 +79,53 @@ def load_model(checkpoint_path):
     if "model_conf" in model_conf:
         conf.model_conf = model_conf["model_conf"]
 
+    conf.checkpoint_path = checkpoint_path
+
     return conf
+
+
+def save_model(model_config, checkpoint_path):
+    def ensure_dict(field):
+        if field is None:
+            return None
+
+        if dataclasses.is_dataclass(field):
+            return dataclasses.asdict(field)
+
+        if not isinstance(field, dict):
+            return field.to_dict()
+
+        return field
+
+    conf = {}
+    conf["model"] = ensure_dict(model_config.model)
+    conf["model_infer"] = ensure_dict(model_config.model_infer)
+    conf["tokenizer"] = ensure_dict(model_config.tokenizer)
+    conf["parallelize"] = ensure_dict(model_config.parallelize)
+
+    with open(os.path.join(checkpoint_path, "config.json"), "w") as f:
+        conf = model_config.model_conf
+
+        if not isinstance(conf, dict):
+            conf = conf.to_dict()
+
+        json.dump(conf, f, indent=2)
+
+    if model_config.tokenizer is None:
+        return
+
+    tokenizer_path = model_config.tokenizer.model_path
+
+    if os.path.exists(tokenizer_path):
+        shutil.copy(tokenizer_path, os.path.join(checkpoint_path, "tokenizer.model"))
+
+    conf = model_config.tokenizer
+
+    if not isinstance(conf, dict):
+        conf = conf.to_dict()
+
+    with open(os.path.join(checkpoint_path, "tokenizer_config.json"), "w") as f:
+        json.dump(conf, f, indent=2)
 
 
 def get_tokenizer(model):
@@ -116,6 +170,9 @@ class Training(Config):
     clip_grad_norm: float | None = None
     n_epochs: int = 1
     eval_step: int = 1000
+
+    train_step_fn: Instance | None = None
+    eval_step_fn: Instance | None = None
 
     data_parallel_replicate: StrictInt = 1
     data_parallel_shard: StrictInt = 1
