@@ -13,16 +13,14 @@ from torch.utils.data import DataLoader
 import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 from torch.distributed.checkpoint.stateful import Stateful
-from torch.distributed.checkpoint.state_dict import (
-    get_model_state_dict,
-    get_optimizer_state_dict,
-    set_model_state_dict,
-    set_optimizer_state_dict,
-    StateDictOptions,
-)
 
 from halite.logging import logger
 from halite.utils import get_torch_dtype
+from halite.distributed.managers import (
+    ModelManager,
+    OptimizerManager,
+    LRSchedulerManager,
+)
 
 
 class IntervalType(enum.Enum):
@@ -34,49 +32,6 @@ class AsyncMode(str, enum.Enum):
     DISABLED = "disabled"
     ASYNC = "async"
     ASYNC_WITH_PINNED_MEM = "async_with_pinned_mem"
-
-
-class ModelWrapper(Stateful):
-    def __init__(self, model: nn.Module | list[nn.Module]) -> None:
-        self.model = [model] if isinstance(model, nn.Module) else model
-
-    def state_dict(self) -> dict[str, Any]:
-        return {
-            k: v for sd in map(get_model_state_dict, self.model) for k, v in sd.items()
-        }
-
-    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
-        func = functools.partial(
-            set_model_state_dict,
-            model_state_dict=state_dict,
-            options=StateDictOptions(strict=False),
-        )
-        list(map(func, self.model))
-
-
-class OptimizerWrapper(Stateful):
-    def __init__(
-        self,
-        model: nn.Module | list[nn.Module],
-        optim: torch.optim.Optimizer | list[torch.optim.Optimizer],
-    ) -> None:
-        self.model = [model] if isinstance(model, nn.Module) else model
-        self.optim = [optim] if isinstance(optim, torch.optim.Optimizer) else optim
-
-    def state_dict(self) -> dict[str, Any]:
-        func = functools.partial(
-            get_optimizer_state_dict,
-            options=StateDictOptions(flatten_optimizer_state_dict=True),
-        )
-        return {k: v for sd in map(func, self.model, self.optim) for k, v in sd.items()}
-
-    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
-        func = functools.partial(
-            set_optimizer_state_dict,
-            optim_state_dict=state_dict,
-            options=StateDictOptions(flatten_optimizer_state_dict=True),
-        )
-        list(map(func, self.model, self.optim))
 
 
 class Terminate:
@@ -128,7 +83,8 @@ class CheckpointManager:
         optimizers: list[torch.optim.Optimizer],
         lr_schedulers: list[torch.optim.lr_scheduler.LRScheduler],
         dataloader: DataLoader,
-        states: dict[str, Any],
+        model_config: Any | None = None,
+        states: dict[str, Any] = None,
         directory: str = "checkpoint",
         interval_type: str = "steps",
         interval: int = 500,
@@ -141,24 +97,37 @@ class CheckpointManager:
         self.enable_checkpoint = enable_checkpoint
         self.keep_latest_k = keep_latest_k
 
-        assert len(model_parts) == len(optimizers)
-        assert len(model_parts) == len(lr_schedulers)
+        if not self.enable_checkpoint:
+            return
 
-        self.states = states
+        self.states = {} if states is None else states
+
+        model_manager = (
+            ModelManager(model_parts)
+            if not isinstance(model_parts, ModelManager)
+            else model_parts
+        )
+        optimizer_manager = (
+            OptimizerManager(model_parts, optimizers)
+            if not isinstance(optimizers, OptimizerManager)
+            else optimizers
+        )
+        lr_scheduler_manager = (
+            LRSchedulerManager(optimizers, lr_schedulers)
+            if not isinstance(lr_schedulers, LRSchedulerManager)
+            else lr_schedulers
+        )
+
         self.states.update(
             {
-                "model": ModelWrapper(model_parts),
-                "optimizer": OptimizerWrapper(model_parts, optimizers),
+                "model": model_manager,
+                "optimizer": optimizer_manager,
                 "dataloader": dataloader,
             }
         )
+        self.states.update(lr_scheduler_manager.get_state_dict())
 
-        if len(lr_schedulers) == 1:
-            self.states["lr_scheduler"] = lr_schedulers[0]
-
-        else:
-            for i, lr_scheduler in enumerate(lr_schedulers):
-                self.states[f"lr_scheduler_{i}"] = lr_scheduler
+        self.model_config = model_config
 
         self.directory = directory
         self.interval_type = (
@@ -311,13 +280,16 @@ class CheckpointManager:
             self.staging = True
             self.staging_id = checkpoint_id
 
-    def save(self, current_step: int, force: bool):
+    def save(self, current_step: int, force: bool = False):
         if not self._should_save(current_step, force):
             return
 
         begin = time.monotonic()
         checkpoint_id = self._create_checkpoint_id(current_step)
         self._async_wait()
+
+        if self.model_config is not None:
+            self.model_config.save(checkpoint_id)
 
         if force:
             self._save_last_step(current_step)
@@ -423,7 +395,7 @@ def load_checkpoint(
         states = {}
 
     if model_parts is not None:
-        states["model"] = ModelWrapper(model_parts)
+        states["model"] = ModelManager(model_parts)
 
     if optimizers is not None:
         states["optimizer"] = OptimizerWrapper(model_parts, optimizers)
