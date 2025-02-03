@@ -208,7 +208,7 @@ class SFTSequencePacking:
                 )
 
             else:
-                buffer.append(input[:input_len])
+                buffer.append(input[: self.length])
 
                 for j, ids in enumerate(ids_lists):
                     buffer_ids[j].append(ids[i])
@@ -216,7 +216,7 @@ class SFTSequencePacking:
                 if self.use_rest_of_long_sequence:
                     return (
                         buffer,
-                        [input[input_len:]] + input_lists[i + 1 :],
+                        [input[self.length :]] + input_lists[i + 1 :],
                         buffer_ids,
                         [[ids[i]] + ids[i + 1 :] for ids in ids_lists],
                     )
