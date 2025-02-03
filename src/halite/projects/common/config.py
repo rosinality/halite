@@ -5,7 +5,7 @@ import json
 import shutil
 from typing import Any
 
-from pydantic import StrictBool, StrictInt, StrictStr
+from pydantic import BaseModel, StrictBool, StrictInt, StrictStr
 from slickconf import Config, Instance, exempt, deserialize, field
 
 from halite.transformers import TransformerConfig
@@ -92,6 +92,9 @@ def save_model(model_config, checkpoint_path):
         if dataclasses.is_dataclass(field):
             return dataclasses.asdict(field)
 
+        if isinstance(field, BaseModel):
+            return field.model_dump()
+
         if not isinstance(field, dict):
             return field.to_dict()
 
@@ -102,13 +105,9 @@ def save_model(model_config, checkpoint_path):
     conf["model_infer"] = ensure_dict(model_config.model_infer)
     conf["tokenizer"] = ensure_dict(model_config.tokenizer)
     conf["parallelize"] = ensure_dict(model_config.parallelize)
+    conf["model_conf"] = ensure_dict(model_config.model_conf)
 
     with open(os.path.join(checkpoint_path, "config.json"), "w") as f:
-        conf = model_config.model_conf
-
-        if not isinstance(conf, dict):
-            conf = conf.to_dict()
-
         json.dump(conf, f, indent=2)
 
     if model_config.tokenizer is None:

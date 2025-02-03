@@ -398,7 +398,7 @@ def load_checkpoint(
         states["model"] = ModelManager(model_parts)
 
     if optimizers is not None:
-        states["optimizer"] = OptimizerWrapper(model_parts, optimizers)
+        states["optimizer"] = OptimizerManager(model_parts, optimizers)
 
     original_stateful_states = {
         k: v for k, v in states.items() if isinstance(v, Stateful)
