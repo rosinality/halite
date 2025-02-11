@@ -25,8 +25,10 @@ class SamplingParams:
         top_p: float = 1.0,
         top_k: int = -1,
         min_p: float = 0,
+        n: int = 1,
         stop: str | list[str] | None = None,
         stop_token_ids: list[int] | None = None,
+        ignore_eos: bool = False,
     ):
         self.max_new_tokens = max_new_tokens
         self.min_new_tokens = min_new_tokens
@@ -34,6 +36,7 @@ class SamplingParams:
         self.top_p = top_p
         self.top_k = top_k
         self.min_p = min_p
+        self.n = n
 
         self.stop_strs = stop
         if stop_token_ids is not None:
@@ -44,6 +47,8 @@ class SamplingParams:
 
         if self.top_k == -1:
             self.top_k = 1 << 30
+
+        self.ignore_eos = ignore_eos
 
         self.normalized = False
 
