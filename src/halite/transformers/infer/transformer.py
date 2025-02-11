@@ -35,7 +35,7 @@ class InferTransformerDecoder(TransformerDecoder):
 
         self.logits_processor = LogitsProcessor()
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def forward(self, batch):
         out = self.embedding(input_ids=batch.input_ids)
 

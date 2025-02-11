@@ -37,9 +37,22 @@ class RadixCache:
         self.request_to_token_pool = request_to_token_pool
         self.kv_pool = kv_pool
 
+        self.initialized = False
+        self.initialize()
+
+    def initialize(self):
+        if self.initialized:
+            return
+
         self.root = Node(key=[], value=[])
         self.root.lock_ref = 1
         self.evictable_size = 0
+
+        self.initialized = True
+
+    def cleanup(self):
+        self.initialized = False
+        self.initialize()
 
     def insert(self, key, value=None):
         if value is None:

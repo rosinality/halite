@@ -103,7 +103,15 @@ class TransformerDecoder(nn.Module, GenerationMixin, ModelMixin):
         for child in self.children():
             child.apply(init_weight)
 
-        self.pos_embed.to(device)
+        self.init_buffers()
+
+    def init_buffers(self, device):
+        def init_buffer(module):
+            if hasattr(module, "init_buffers"):
+                module.init_buffers(device)
+
+        for child in self.children():
+            child.apply(init_buffer)
 
     def add_adapter(self, name, keys):
         if self.adapters is None:

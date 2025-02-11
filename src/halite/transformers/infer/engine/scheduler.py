@@ -36,12 +36,7 @@ class Scheduler:
 
         self.tree_cache = RadixCache(self.request_to_token_pool, self.kv_pool)
 
-        self.waiting_queue = []
-        self.running_batch = None
-        self.current_batch = None
-
         self.max_running_requests = self.model_runner.max_running_requests
-        self.is_mixed_chunk = False
 
         self.init_new_token_ratio = min(
             server_config.default_init_new_token_ratio
@@ -60,10 +55,22 @@ class Scheduler:
         self.max_prefill_tokens = server_config.max_prefill_tokens
         self.chunked_prefill_size = server_config.chunked_prefill_size
 
-        self.last_batch = None
-
-        self.n_generated_tokens = 0
         self.n_decode_steps_per_batch = 1
+
+        self.initialize()
+
+    def initialize(self):
+        self.waiting_queue = []
+        self.running_batch = None
+        self.current_batch = None
+        self.is_mixed_chunk = False
+        self.last_batch = None
+        self.n_generated_tokens = 0
+        self.tree_cache.initialize()
+
+    def cleanup(self):
+        self.initialize()
+        self.tree_cache.cleanup()
 
     def infer_batch(self, requests):
         outputs = []
@@ -74,12 +81,10 @@ class Scheduler:
             finished, batch_output = self.infer([])
             outputs.extend(batch_output)
 
-        outputs_sorted = sorted(outputs, key=lambda x: x[0])
-
-        return [x[1:] for x in outputs_sorted]
+        return outputs
 
     def infer(self, requests):
-        self.process_requests(range(len(requests)), requests)
+        self.process_requests(requests)
         batch = self.get_next_batch()
         self.current_batch = batch
         finished = batch is None
@@ -144,6 +149,9 @@ class Scheduler:
                     input_text = None
                     input_ids = text_or_tokens
 
+                if not isinstance(sampling_params, SamplingParams):
+                    sampling_params = SamplingParams(**sampling_params)
+
                 req = Request(i, input_text, input_ids, sampling_params)
 
             elif not isinstance(req, Request):
@@ -155,9 +163,9 @@ class Scheduler:
 
         return results
 
-    def process_requests(self, ids, requests):
-        for id, req in zip(ids, requests):
-            self.handle_generate_request(id, req)
+    def process_requests(self, requests):
+        for req in requests:
+            self.handle_generate_request(req.id, req)
 
     def handle_generate_request(self, id, req):
         req = Request(id, req.input_text, req.input_ids, req.sampling_params)

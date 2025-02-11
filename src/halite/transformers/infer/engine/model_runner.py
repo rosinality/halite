@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 import torch
 
+from halite.distributed.state_dict import reshard_state_dict
 from halite.transformers.infer.engine.sampler import Sampler
 from halite.transformers.infer.engine.memory_pool import RequestToTokenPool, MHAKVPool
 from halite.transformers.infer.engine.device import get_available_gpu_memory
@@ -105,6 +106,25 @@ class ModelRunner:
             max_context_len=context_len,
             device=device,
         )
+
+    def initialize(self):
+        self.request_to_token_pool.initialize()
+        self.kv_pool.initialize()
+        self.attention_backend.initialize()
+
+    def cleanup(self):
+        self.request_to_token_pool.cleanup()
+        self.kv_pool.cleanup()
+        self.attention_backend.cleanup()
+
+    def load_state_dict(self, state_dict, assign=True):
+        self.model.to("meta")
+        state_dict = reshard_state_dict(state_dict, self.model.state_dict())
+
+        if not assign:
+            self.model.to_empty(device=self.device)
+
+        self.model.load_state_dict(state_dict, assign=assign)
 
     def estimate_max_n_tokens(self, gpu_memory: int):
         available_memory = get_available_gpu_memory(

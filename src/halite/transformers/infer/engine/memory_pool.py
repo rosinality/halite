@@ -7,11 +7,27 @@ class RequestToTokenPool:
         self.max_context_len = max_context_len
         self.device = device
 
+        self.initialized = False
+        self.initialize()
+
+    def initialize(self):
+        if self.initialized:
+            return
+
         self.request_to_token = torch.zeros(
-            max_size, max_context_len, dtype=torch.int32, device=device
+            self.max_size, self.max_context_len, dtype=torch.int32, device=self.device
         )
-        self.free_slots = list(range(max_size))
+        self.free_slots = list(range(self.max_size))
         self.write_records = []
+
+        self.initialized = True
+
+    def cleanup(self):
+        del self.request_to_token
+        del self.free_slots
+        del self.write_records
+
+        self.initialized = False
 
     def write(self, indices, values):
         self.request_to_token[indices] = values
@@ -54,11 +70,33 @@ class MHAKVPool(KVPool):
         self.size = size
         self.device = device
 
+        self.n_layers = n_layers
+        self.n_heads = n_heads
+        self.head_dim = head_dim
+        self.dtype = dtype
+
+        self.initialized = False
+        self.initialize()
+
+    def initialize(self):
+        if self.initialized:
+            return
+
         self.k_buffer = torch.empty(
-            n_layers, size + 1, n_heads, head_dim, dtype=dtype, device=device
+            self.n_layers,
+            self.size + 1,
+            self.n_heads,
+            self.head_dim,
+            dtype=self.dtype,
+            device=self.device,
         ).unbind(0)
         self.v_buffer = torch.empty(
-            n_layers, size + 1, n_heads, head_dim, dtype=dtype, device=device
+            self.n_layers,
+            self.size + 1,
+            self.n_heads,
+            self.head_dim,
+            dtype=self.dtype,
+            device=self.device,
         )
 
         self.is_in_free_group = False
@@ -68,6 +106,17 @@ class MHAKVPool(KVPool):
         self.free_group = []
 
         self.clear()
+
+        self.initialized = True
+
+    def cleanup(self):
+        del self.k_buffer
+        del self.v_buffer
+        del self.free_slots
+        del self.free_group
+        self.is_in_free_group = False
+
+        self.initialized = False
 
     def alloc(self, size):
         if size > self.free_slots.shape[0]:

@@ -98,29 +98,49 @@ class FlashInferBackend:
         self.request_to_token = request_to_token
         self.device = device
         self.dtype = dtype
+        self.workspace_size = workspace_size
 
         self.max_batch_size = max_batch_size
         self.max_context_len = max_context_len
 
+        self.initialized = False
+        self.initialize()
+
+    def initialize(self):
+        if self.initialized:
+            return
+
         self.kv_indptr = torch.zeros(
-            max_batch_size + 1, dtype=torch.int32, device=device
+            self.max_batch_size + 1, dtype=torch.int32, device=self.device
         )
         self.qo_indptr = torch.zeros(
-            max_batch_size + 1, dtype=torch.int32, device=device
+            self.max_batch_size + 1, dtype=torch.int32, device=self.device
         )
         self.kv_last_page_len = torch.ones(
-            max_batch_size, dtype=torch.int32, device=device
+            self.max_batch_size, dtype=torch.int32, device=self.device
         )
 
         self.prefill = BatchPrefillWithPagedKVCacheWrapper(
-            torch.empty(workspace_size, dtype=torch.uint8, device=device), "NHD"
+            torch.empty(self.workspace_size, dtype=torch.uint8, device=self.device),
+            "NHD",
         )
 
         self.decode = BatchDecodeWithPagedKVCacheWrapper(
-            torch.empty(workspace_size, dtype=torch.uint8, device=device),
+            torch.empty(self.workspace_size, dtype=torch.uint8, device=self.device),
             "NHD",
             use_tensor_cores=self.use_tensor_cores,
         )
+
+        self.initialized = True
+
+    def cleanup(self):
+        del self.kv_indptr
+        del self.qo_indptr
+        del self.kv_last_page_len
+        del self.prefill
+        del self.decode
+
+        self.initialized = False
 
     def get_wrapper(self):
         return self.prefill, self.decode
