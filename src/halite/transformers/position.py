@@ -100,9 +100,9 @@ class RotaryEmbedding(nn.Module):
         self.device = device
         self.use_complex = use_complex
 
-        self.init_weights()
+        self.init_buffers()
 
-    def init_weights(self):
+    def init_buffers(self):
         inv_freq = self.get_inv_freq()
         self.inv_freq = inv_freq
 
