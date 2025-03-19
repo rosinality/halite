@@ -2,8 +2,19 @@ import bisect
 import dataclasses
 import os
 import math
+import itertools
 
-import array_record.python.array_record_data_source as array_record
+try:
+    import array_record.python.array_record_data_source as array_record
+except ImportError:
+    array_record = None
+
+try:
+    from ffrecord import FileReader
+
+except ImportError:
+    FileReader = None
+
 import torch
 from torch.utils import data
 
@@ -17,6 +28,39 @@ class FileInstruction:
     skip: int
     take: int
     examples_in_shard: int
+
+
+class FFRecordDataSource:
+    def __init__(self, file_instructions):
+        self.readers = [
+            FileReader(instruction.filename, check_data=False)
+            for instruction in file_instructions
+        ]
+        indices = [instruction.take for instruction in file_instructions]
+        self.cumsum = list(itertools.accumulate(indices))
+        self.length = sum(indices)
+        self.skips = [instruction.skip for instruction in file_instructions]
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, index):
+        reader_id = bisect.bisect_right(self.cumsum, index)
+
+        sample_id = index
+        if reader_id > 0:
+            sample_id = index - self.cumsum[reader_id - 1]
+
+        if reader_id == len(self.skips):
+            print(self.length, self.cumsum, self.skips, reader_id, sample_id)
+
+        sample_id += self.skips[reader_id]
+
+        return self.readers[reader_id].read_one(sample_id).tobytes()
+
+    def __del__(self):
+        for reader in self.readers:
+            reader.close()
 
 
 def build_dataset_from_spec(spec, split="train", split_ratio=0):
@@ -55,7 +99,17 @@ def build_dataset_from_spec(spec, split="train", split_ratio=0):
                     )
                 )
 
-        datasources[dataset] = array_record.ArrayRecordDataSource(instructions)
+        if len(instructions) == 0:
+            continue
+
+        if instructions[0].filename.endswith(".ffr"):
+            datasources[dataset] = FFRecordDataSource(instructions)
+
+        elif instructions[0].filename.endswith(".arrayrecord"):
+            datasources[dataset] = array_record.ArrayRecordDataSource(instructions)
+
+        else:
+            raise ValueError(f"Unsupported file extension: {instructions[0].filename}")
 
     datasets = []
     ratios = []

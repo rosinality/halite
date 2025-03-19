@@ -3,18 +3,30 @@ from glob import glob
 import os
 import json
 
-import array_record.python.array_record_data_source as array_record
+try:
+    import array_record.python.array_record_data_source as array_record
+
+except ImportError:
+    array_record = None
+
+try:
+    from ffrecord import FileReader
+
+except ImportError:
+    FileReader = None
+
 from tqdm import tqdm
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--depth", type=int, default=0)
     parser.add_argument("--output", type=str, default=None)
+    parser.add_argument("--ext", type=str, default="arrayrecord")
     parser.add_argument("path", type=str)
 
     args = parser.parse_args()
 
-    files = sorted(glob(os.path.join(args.path, "**/*.arrayrecord"), recursive=True))
+    files = sorted(glob(os.path.join(args.path, f"**/*.{args.ext}"), recursive=True))
     dataset_collection = {}
 
     rel_root = args.path
@@ -35,13 +47,23 @@ if __name__ == "__main__":
 
         rel_file = os.path.relpath(file, dirname)
 
-        ds = array_record.ArrayRecordDataSource(file)
+        if file.endswith(".arrayrecord"):
+            ds = array_record.ArrayRecordDataSource(file)
+            length = len(ds)
 
-        if dataset not in dataset_collection:
-            dataset_collection[dataset] = {rel_file: len(ds)}
+        elif file.endswith(".ffr"):
+            ds = FileReader(file, check_data=False)
+            length = ds.n
+            ds.close()
 
         else:
-            dataset_collection[dataset][rel_file] = len(ds)
+            raise ValueError(f"Unsupported file extension: {file}")
+
+        if dataset not in dataset_collection:
+            dataset_collection[dataset] = {rel_file: length}
+
+        else:
+            dataset_collection[dataset][rel_file] = length
 
     total_sizes = {}
 
