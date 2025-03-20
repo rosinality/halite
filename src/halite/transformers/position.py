@@ -102,10 +102,11 @@ class RotaryEmbedding(nn.Module):
 
         self.init_buffers()
 
-    def init_buffers(self):
+    def init_buffers(self, device="cpu"):
         inv_freq = self.get_inv_freq()
         self.inv_freq = inv_freq
 
+        # it is better to do this in cpu, on cuda it will give different results
         self.init_cache(self.max_position_embeddings, "cpu", torch.float32)
 
     def get_inv_freq(self):
