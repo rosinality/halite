@@ -163,15 +163,11 @@ def unpermute(
 
     output_size = [n_unpermuted_tokens, permuted_tokens.shape[-1]]
 
-    print("unpermute output size", output_size)
-
     moe_scatter_indices = sorted_indices.unsqueeze(1).expand(
         -1, permuted_tokens.shape[-1]
     )
     unpermuted_tokens = moe_scatter(permuted_tokens, moe_scatter_indices, output_size)
     unpermuted_tokens = unpermuted_tokens.reshape(-1, top_k, permuted_tokens.shape[-1])
-
-    print("unpermuted tokens", unpermuted_tokens)
 
     if probs is not None:
         unpermuted_tokens = unpermuted_tokens * probs.unsqueeze(-1)
@@ -275,7 +271,6 @@ class AlltoAllTokenDispatcher(nn.Module):
         if self.capacity_factor is not None:
             n_out_tokens = n_local_tokens_per_expert.sum().to("cpu", non_blocking=True)
             cuda_sync_point = "before_permutation_1"
-            print("n_out_tokens", n_out_tokens, indices)
 
         n_global_tokens_per_local_expert = n_local_tokens_per_expert.reshape(
             self.n_experts
@@ -339,7 +334,6 @@ class AlltoAllTokenDispatcher(nn.Module):
         permuted_local_input_tokens, reverse_permute_indices = permute(
             input, indices, permute_state.n_out_tokens, self.pad_to_capacity
         )
-        print("permuted local input tokens", permuted_local_input_tokens)
         global_input_tokens = all_to_all(
             permuted_local_input_tokens,
             permute_state.output_splits,
@@ -347,17 +341,12 @@ class AlltoAllTokenDispatcher(nn.Module):
             self.ep_group,
         )
 
-        print("splits", permute_state.output_splits, permute_state.input_splits)
-        print("all to all global input tokens", global_input_tokens)
-
         if self.n_local_experts > 1:
             global_input_tokens = sort_chunks_by_indices(
                 global_input_tokens,
                 permute_state.n_global_tokens_per_local_expert.ravel(),
                 self.sort_input_by_local_experts,
             )
-
-        print("global input tokens", global_input_tokens)
 
         permute_state.input_shape = input_shape
         permute_state.reverse_permute_indices = reverse_permute_indices

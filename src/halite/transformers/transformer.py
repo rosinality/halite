@@ -103,7 +103,7 @@ class TransformerDecoder(nn.Module, GenerationMixin, ModelMixin):
         for child in self.children():
             child.apply(init_weight)
 
-        self.init_buffers()
+        self.init_buffers(device)
 
     def init_buffers(self, device):
         def init_buffer(module):
