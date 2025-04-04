@@ -26,6 +26,8 @@ def get_pos_emb(pos_emb):
 @dataclass
 class TransformerDecoderOutput:
     logits: Optional[torch.Tensor] = None
+    loss: Optional[torch.Tensor] = None
+    loss_dict: Optional[dict[str, torch.Tensor]] = None
     last_hidden_state: Optional[torch.Tensor] = None
     hidden_states: Optional[List[torch.Tensor]] = None
     cache: Optional[Any] = None
@@ -245,6 +247,7 @@ class TransformerDecoder(nn.Module, GenerationMixin, ModelMixin):
         use_cache=False,
         output_hidden_states=False,
         document_offsets=None,
+        target=None,
     ):
         out = self.embedding(input_ids=input_ids)
 
@@ -388,19 +391,30 @@ class TransformerDecoder(nn.Module, GenerationMixin, ModelMixin):
         if output_hidden_states:
             hidden.append(out)
 
-        if self.head is not None:
-            out = self.head(out)
+        if self.head is None:
+            return TransformerDecoderOutput(
+                last_hidden_state=out,
+                hidden_states=hidden,
+                cache=next_caches,
+                aux_outputs=aux_outputs,
+            )
+
+        if target is not None:
+            out, loss_dict = self.head(out, target)
 
             return TransformerDecoderOutput(
-                logits=out,
+                loss=out,
+                loss_dict=loss_dict,
                 hidden_states=hidden,
                 cache=next_caches,
                 aux_outputs=aux_outputs,
             )
 
         else:
+            out = self.head(out)
+
             return TransformerDecoderOutput(
-                last_hidden_state=out,
+                logits=out,
                 hidden_states=hidden,
                 cache=next_caches,
                 aux_outputs=aux_outputs,

@@ -62,8 +62,14 @@ def train(
         optimizer.zero_grad()
         batch = batch.to(device)
         labels = batch.pop("target")
-        out = model(batch["input"])
-        loss, loss_dict = criterion(out.logits, labels)
+
+        if conf.training.calc_loss_in_model:
+            out = model(batch["input"], target=labels)
+            loss, loss_dict = out.loss, out.loss_dict
+
+        else:
+            out = model(batch["input"])
+            loss, loss_dict = criterion(out.logits, labels)
 
         if out.aux_outputs is not None:
             for aux_out in out.aux_outputs:
@@ -159,8 +165,14 @@ def evaluate(conf, model, criterion, eval_loader, device, parallel_dims, logger)
 
         batch = batch.to(device)
         labels = batch.pop("target")
-        out = model(batch["input"])
-        loss, loss_dict = criterion(out.logits, labels)
+
+        if conf.training.calc_loss_in_model:
+            out = model(batch["input"], target=labels)
+            loss, loss_dict = out.loss, out.loss_dict
+
+        else:
+            out = model(batch["input"])
+            loss, loss_dict = criterion(out.logits, labels)
 
         if out.aux_outputs is not None:
             for aux_out in out.aux_outputs:

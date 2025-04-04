@@ -14,6 +14,7 @@ from halite.transformers.feedforward import (
     GatedFeedForward,
     VocabParallelLinear,
     SequenceParallelWrapper,
+    FusedLinearCrossEntropy,
 )
 from halite.transformers.position import RotaryEmbedding, apply_rotary_emb
 from halite.transformers.transformer import TransformerDecoder
@@ -346,5 +347,20 @@ def transformer_infer(
 @config_fn
 def use_flex_attention(model_conf):
     conf = select(model_conf).instance(Attention).update_dict(dict(processor="flex"))
+
+    return conf
+
+
+@config_fn
+def use_fused_linear_cross_entropy(model_conf, ignore_index=-100, z_loss=0):
+    conf = (
+        select(model_conf)
+        .instance(VocabParallelLinear)
+        .map(
+            lambda x: FusedLinearCrossEntropy(
+                x.linear, x.linear_init, ignore_index=ignore_index, z_loss=z_loss
+            )
+        )
+    )
 
     return conf
