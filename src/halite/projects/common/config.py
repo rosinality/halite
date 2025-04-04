@@ -178,6 +178,8 @@ class Training(Config):
     tensor_parallel: StrictInt = 1
     pipeline_parallel: StrictInt = 1
 
+    calc_loss_in_model: StrictBool = False
+
 
 class Dataset(Config):
     root: str

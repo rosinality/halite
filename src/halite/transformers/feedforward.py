@@ -9,7 +9,53 @@ from torch.distributed.tensor.parallel import (
     SequenceParallel,
 )
 
+from halite.nn.fused_linear_cross_entropy import fused_linear_cross_entropy
 from halite.transformers.initialize import init_weights
+
+
+class FusedLinearCrossEntropy(nn.Module):
+    def __init__(
+        self,
+        linear,
+        linear_init=None,
+        ignore_index=-100,
+        z_loss=0,
+    ):
+        super().__init__()
+
+        self.linear = linear
+
+        self.linear_init = linear_init
+        self.ignore_index = ignore_index
+        self.z_loss = z_loss
+
+    def init_weights(self):
+        init_weights(self.linear, self.linear_init)
+
+    def forward(self, input, target):
+        use_z_loss = self.z_loss > 0
+
+        input = input.view(-1, input.shape[-1])
+        target = target.view(-1)
+
+        loss, z_loss = fused_linear_cross_entropy(
+            input,
+            self.linear.weight,
+            target,
+            self.linear.bias,
+            ignore_index=self.ignore_index,
+            lse_square_scale=self.z_loss,
+            return_z_loss=use_z_loss,
+        )
+
+        loss_dict = {"cross entropy": loss.detach()}
+
+        if use_z_loss:
+            z_loss = z_loss.detach().mean()
+            loss_dict["z-loss"] = z_loss
+            loss_dict["cross entropy"] -= z_loss
+
+        return loss, loss_dict
 
 
 class VocabParallelLinear(nn.Module):
