@@ -39,6 +39,7 @@ class BatchDocumentMask:
     inputs: tuple[str] = ("document_offsets",)
     update_mode: FlexAttentionUpdateMode = FlexAttentionUpdateMode.BATCH
     head_shared: bool = True
+    batch_shared: bool = False
 
     def __init__(self, mask_mod: _mask_mod_signature):
         # get mask mod function, currently does not support mod function with args
