@@ -9,6 +9,7 @@ class CausalMask:
     inputs: tuple[str] = ()
     update_mode: FlexAttentionUpdateMode = FlexAttentionUpdateMode.NEVER
     head_shared: bool = True
+    batch_shared: bool = True
 
     def __call__(self):
         return causal_mask

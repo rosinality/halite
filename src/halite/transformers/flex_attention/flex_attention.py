@@ -32,9 +32,13 @@ class FlexAttentionProcessor(nn.Module):
         self.score_mod = score_mod
         self.block_mask = block_mask
         self.n_heads = n_heads
+        self.batch_shared = False
 
-        if self.block_mask is not None and self.block_mask.head_shared:
-            self.n_heads = None
+        if self.block_mask is not None:
+            if self.block_mask.head_shared:
+                self.n_heads = None
+
+            self.batch_shared = self.block_mask.batch_shared
 
         self.score_mod_update_mode = (
             score_mod.update_mode
@@ -90,6 +94,9 @@ class FlexAttentionProcessor(nn.Module):
             block_mask = self.block_mask(**block_mask_kwargs)
 
         if not isinstance(block_mask, BlockMask):
+            if self.batch_shared:
+                batch = None
+
             block_mask = create_block_mask(
                 block_mask,
                 batch,
