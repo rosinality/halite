@@ -90,7 +90,13 @@ class RotaryEmbedding(nn.Module):
     layer_shared: bool = True
 
     def __init__(
-        self, dim, max_position_embeddings, base=10000, device=None, use_complex=False
+        self,
+        dim,
+        max_position_embeddings,
+        base=10000,
+        device=None,
+        use_complex=False,
+        use_rotate_half=False,
     ):
         super().__init__()
 
@@ -99,15 +105,16 @@ class RotaryEmbedding(nn.Module):
         self.base = base
         self.device = device
         self.use_complex = use_complex
+        self.use_rotate_half = use_rotate_half
 
         self.init_buffers()
 
-    def init_buffers(self, device="cpu"):
+    def init_buffers(self):
         inv_freq = self.get_inv_freq()
         self.inv_freq = inv_freq
 
-        # it is better to do this in cpu, on cuda it will give different results
-        self.init_cache(self.max_position_embeddings, "cpu", torch.float32)
+        # this can result in different results per device
+        self.init_cache(self.max_position_embeddings, self.device, torch.float32)
 
     def get_inv_freq(self):
         inv_freq = 1 / (
@@ -126,7 +133,7 @@ class RotaryEmbedding(nn.Module):
             self.max_seq_len_cached, device=device, dtype=self.inv_freq.dtype
         )
 
-        freqs = torch.outer(t, self.inv_freq)
+        freqs = torch.outer(t, self.inv_freq.to(t.device))
 
         if self.use_complex:
             freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
@@ -135,23 +142,24 @@ class RotaryEmbedding(nn.Module):
             return
 
         cos, sin = freqs.cos(), freqs.sin()
-        self.freqs_cis = torch.stack((cos, -sin, sin, cos), -1).view(*freqs.shape, 2, 2)
 
-        # emb = torch.cat((freqs, freqs), -1)
+        if self.use_rotate_half:
+            self.cos = torch.cat((cos, cos), -1)
+            self.sin = torch.cat((sin, sin), -1)
 
-        # self.cos_cache = emb.cos().to(dtype)
-        # self.sin_cache = emb.sin().to(dtype)
+        else:
+            self.freqs_cis = torch.stack((cos, -sin, sin, cos), -1).view(
+                *freqs.shape, 2, 2
+            )
 
     def cast_cache(self, device):
-        self.freqs_cis = self.freqs_cis.to(device)
-
-        if self.use_complex:
-            self.freqs_cis = self.freqs_cis.to(device)
+        if self.use_rotate_half:
+            self.cos = self.cos.to(device)
+            self.sin = self.sin.to(device)
 
             return
 
-        # self.cos_cache = self.cos_cache.to(device)
-        # self.sin_cache = self.sin_cache.to(device)
+        self.freqs_cis = self.freqs_cis.to(device)
 
     def forward(self, position_ids, seq_len=None, device=None, dtype=None):
         if seq_len > self.max_seq_len_cached:
@@ -164,12 +172,48 @@ class RotaryEmbedding(nn.Module):
 
             return freqs_cis
 
+        if self.use_rotate_half:
+            cos = self.cos[position_ids]
+            sin = self.sin[position_ids]
+
+            return cos, sin
+
         return self.freqs_cis[position_ids].unsqueeze(-4)
 
         # cos = self.cos_cache[position_ids].unsqueeze(-2).to(device=device, dtype=dtype)
         # sin = self.sin_cache[position_ids].unsqueeze(-2).to(device=device, dtype=dtype)
 
         # return cos, sin
+
+
+class LinearRoPE(RotaryEmbedding):
+    def __init__(
+        self,
+        dim,
+        max_position_embeddings,
+        base=10000,
+        device=None,
+        use_complex=False,
+        use_rotate_half=False,
+        scaling=1.0,
+    ):
+        self.scaling = scaling
+
+        super().__init__(
+            dim, max_position_embeddings, base, device, use_complex, use_rotate_half
+        )
+
+    def get_inv_freq(self):
+        inv_freq = 1 / (
+            self.base
+            ** (
+                torch.arange(0, self.dim, 2, dtype=torch.float32, device="cpu")
+                / self.dim
+            )
+        )
+        inv_freq /= self.scaling
+
+        return inv_freq
 
 
 class Llama3RoPE(RotaryEmbedding):
@@ -237,15 +281,21 @@ def apply_rotary_emb(query, key, pos_embed, use_fp32=False, use_complex=False):
     if use_complex:
         return apply_rotary_emb_complex(query, key, pos_embed)
 
-    # cos, sin = pos_embed
     dtype = query.dtype
 
     if use_fp32:
         query = query.to(torch.float32)
         key = key.to(torch.float32)
 
-    # cos = cos.to(query.dtype)
-    # sin = sin.to(query.dtype)
+    if isinstance(pos_embed, tuple):
+        cos, sin = pos_embed
+        cos = cos.to(query.dtype).unsqueeze(2)
+        sin = sin.to(query.dtype).unsqueeze(2)
+        q_embed = (query * cos) + (rotate_half(query) * sin)
+        k_embed = (key * cos) + (rotate_half(key) * sin)
+
+        return q_embed.to(dtype), k_embed.to(dtype)
+
     pos_embed = pos_embed.to(query.dtype)
 
     query = query.view(*query.shape[:-1], -1, 1, 2)
@@ -258,3 +308,13 @@ def apply_rotary_emb(query, key, pos_embed, use_fp32=False, use_complex=False):
     # k_embed = (key * cos) + (rotate_half(key) * sin)
 
     return q_embed.to(dtype), k_embed.to(dtype)
+
+
+class LearnedPositionEmbedding(nn.Module):
+    def __init__(self, dim, max_position_embeddings):
+        super().__init__()
+
+        self.pos_embed = nn.Parameter(torch.zeros(max_position_embeddings, dim))
+
+    def forward(self, input):
+        return input + self.pos_embed.unsqueeze(0)

@@ -4,7 +4,7 @@ from functools import partial
 from slickconf import config_fn, call, annotate, patch, patch_fn, select
 from torch import nn
 
-from halite.nn.activation import SwiGLU
+from halite.nn.activation import SwiGLU, GEGLU
 from halite.nn.normalization import RMSNorm
 from halite.transformers.attention import Attention, SelfAttention, SelfAttentionQKV
 from halite.transformers.block import TransformerEncoderBlock, ResidualBlock
@@ -33,6 +33,17 @@ except ImportError:
 
 
 @config_fn
+def get_activation(activation):
+    activation_map = {
+        "swiglu": (SwiGLU(), nn.SiLU()),
+        "gelu_tanh": (nn.GELU(approximate="tanh"), None),
+        "geglu_tanh": (GEGLU(approximate="tanh"), nn.GELU(approximate="tanh")),
+    }
+
+    return activation_map.get(activation)
+
+
+@config_fn
 def build_block(
     layer_id,
     dim,
@@ -42,14 +53,22 @@ def build_block(
     intermediate_size,
     n_key_value_heads=None,
     softcap=0.0,
+    norm=None,
     rms_norm_epsilon=1e-6,
     post_norm=False,
     pos_embed_apply_fn=None,
     attention_processor="auto",
+    attention_bias=False,
+    is_causal=True,
     qkv_split=False,
+    ffn_bias=False,
+    ffn_activation="swiglu",
     gated_ff_split=False,
     fast_norm=False,
     infer: str | None = None,
+    q_norm=None,
+    k_norm=None,
+    layer_type=None,
 ):
     if infer == "flashinfer":
         attention = FlashInferAttention(
@@ -69,16 +88,20 @@ def build_block(
             apply_pos_emb_fn=pos_embed_apply_fn,
             processor=attention_processor,
             softcap=softcap,
-            is_causal=True,
+            is_causal=is_causal,
+            q_norm=deepcopy(q_norm),
+            k_norm=deepcopy(k_norm),
         )
 
-    rmsnorm = RMSNorm(dim, eps=rms_norm_epsilon, fast=fast_norm)
-    rmsnorm_post = RMSNorm(
-        dim,
-        eps=rms_norm_epsilon,
-        weight_init=partial(nn.init.constant_, val=1 / (n_layers**0.5)),
-        fast=fast_norm,
-    )
+    norm_post = norm
+    if norm is None:
+        norm = RMSNorm(dim, eps=rms_norm_epsilon, fast=fast_norm)
+        norm_post = RMSNorm(
+            dim,
+            eps=rms_norm_epsilon,
+            weight_init=partial(nn.init.constant_, val=1 / (n_layers**0.5)),
+            fast=fast_norm,
+        )
 
     if n_key_value_heads is None:
         n_key_value_heads = n_heads
@@ -89,15 +112,16 @@ def build_block(
         )
 
         self_attention = self_attention_class(
-            q=nn.Linear(dim, head_dim * n_heads, bias=False),
-            k=nn.Linear(dim, head_dim * n_key_value_heads, bias=False),
-            v=nn.Linear(dim, head_dim * n_key_value_heads, bias=False),
+            q=nn.Linear(dim, head_dim * n_heads, bias=attention_bias),
+            k=nn.Linear(dim, head_dim * n_key_value_heads, bias=attention_bias),
+            v=nn.Linear(dim, head_dim * n_key_value_heads, bias=attention_bias),
             attention=attention,
-            out=nn.Linear(dim, dim, bias=False),
+            out=nn.Linear(head_dim * n_heads, dim, bias=attention_bias),
             q_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
             k_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
             v_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
             out_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
+            layer_type=layer_type,
         )
 
     else:
@@ -107,31 +131,38 @@ def build_block(
 
         self_attention = self_attention_class(
             qkv=nn.Linear(
-                dim, head_dim * (n_heads + n_key_value_heads * 2), bias=False
+                dim, head_dim * (n_heads + n_key_value_heads * 2), bias=attention_bias
             ),
             attention=attention,
-            out=nn.Linear(dim, dim, bias=False),
+            out=nn.Linear(head_dim * n_heads, dim, bias=attention_bias),
             qkv_split="llama",
             qkv_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
             out_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
+            layer_type=layer_type,
         )
+
+    gated_act, base_act = call[get_activation](ffn_activation)
 
     if gated_ff_split:
         ff = GatedFeedForward(
-            nn.Linear(dim, intermediate_size, bias=False),
-            nn.Linear(dim, intermediate_size, bias=False),
-            nn.SiLU(),
-            nn.Linear(intermediate_size, dim, bias=False),
+            nn.Linear(dim, intermediate_size, bias=ffn_bias),
+            nn.Linear(dim, intermediate_size, bias=ffn_bias),
+            deepcopy(base_act),
+            nn.Linear(intermediate_size, dim, bias=ffn_bias),
             linear_proj_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
             linear_gate_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
             linear_out_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
         )
 
     else:
+        gate_intermediate_size = intermediate_size
+        if base_act is not None:
+            gate_intermediate_size = intermediate_size * 2
+
         ff = FeedForward(
-            nn.Linear(dim, intermediate_size * 2, bias=False),
-            SwiGLU(),
-            nn.Linear(intermediate_size, dim, bias=False),
+            nn.Linear(dim, gate_intermediate_size, bias=ffn_bias),
+            deepcopy(gated_act),
+            nn.Linear(intermediate_size, dim, bias=ffn_bias),
             linear1_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
             linear2_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
         )
@@ -144,14 +175,14 @@ def build_block(
 
     block = block_class(
         ResidualBlock(
-            deepcopy(rmsnorm),
+            deepcopy(norm),
             self_attention,
-            post_norm=(deepcopy(rmsnorm_post) if post_norm else None),
+            post_norm=(deepcopy(norm_post) if post_norm else None),
         ),
         ResidualBlock(
-            deepcopy(rmsnorm),
+            deepcopy(norm),
             ff,
-            post_norm=(deepcopy(rmsnorm_post) if post_norm else None),
+            post_norm=(deepcopy(norm_post) if post_norm else None),
         ),
     )
 
@@ -168,27 +199,41 @@ def transformer(
     intermediate_size,
     context_len,
     n_key_value_heads=None,
-    pos_embed=None,
+    pos_embed="rope",
     pos_embed_apply_fn=None,
     softcap=0.0,
+    is_causal=True,
+    norm=None,
     rms_norm_epsilon=1e-6,
     post_norm=False,
     attention_processor="auto",
+    attention_bias=False,
+    flex_attention_processor=None,
     qkv_split=False,
     gated_ff_split=False,
+    ffn_bias=False,
+    ffn_activation="swiglu",
     infer: str | None = None,
+    embedding=None,
+    q_norm=None,
+    k_norm=None,
+    use_head=True,
+    tie_embeds=False,
+    layer_types=None,
 ):
     blocks = []
 
     fast_norm = attention_processor == "flash_attn"
 
-    if pos_embed is None:
+    if isinstance(pos_embed, str) and pos_embed == "rope":
         pos_embed = RotaryEmbedding(head_dim, context_len)
-
-    if pos_embed_apply_fn is None:
         pos_embed_apply_fn = partial(apply_rotary_emb)
 
     for i in range(n_layers):
+        layer_type = None
+        if layer_types is not None:
+            layer_type = layer_types[i]
+
         blocks += [
             call[build_block](
                 i,
@@ -199,14 +244,22 @@ def transformer(
                 intermediate_size,
                 n_key_value_heads,
                 softcap,
+                norm,
                 rms_norm_epsilon,
                 post_norm,
                 pos_embed_apply_fn,
                 attention_processor,
+                attention_bias,
+                is_causal,
                 qkv_split,
+                ffn_bias,
+                ffn_activation,
                 gated_ff_split,
                 fast_norm,
                 infer=infer,
+                q_norm=q_norm,
+                k_norm=k_norm,
+                layer_type=layer_type,
             )
         ]
 
@@ -216,24 +269,34 @@ def transformer(
     else:
         transformer_class = TransformerDecoder
 
-    transformer = transformer_class(
-        embedding=TextEmbedding(
+    if embedding is None:
+        embedding = TextEmbedding(
             nn.Embedding(vocab_size, dim),
             0,
             embed_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
-        ),
-        pos_embed=pos_embed,
-        blocks=blocks,
-        post_blocks=SequenceParallelWrapper(
-            RMSNorm(dim, eps=rms_norm_epsilon, fast=fast_norm)
-        ),
-        head=VocabParallelLinear(
+        )
+
+    head = None
+
+    if use_head:
+        head = VocabParallelLinear(
             nn.Linear(dim, vocab_size, bias=False),
             linear_init=partial(nn.init.kaiming_normal_, nonlinearity="linear"),
-        ),
-        tie_embeds=False,
+        )
+
+    if norm is None:
+        norm = RMSNorm(dim, eps=rms_norm_epsilon, fast=fast_norm)
+
+    transformer = transformer_class(
+        embedding=embedding,
+        pos_embed=pos_embed,
+        blocks=blocks,
+        post_blocks=SequenceParallelWrapper(norm),
+        head=head,
+        tie_embeds=tie_embeds,
         use_position_ids=True,
         attention_processor=attention_processor,
+        flex_attention_processor=flex_attention_processor,
     )
 
     return transformer

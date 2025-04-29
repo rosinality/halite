@@ -69,6 +69,8 @@ class VocabParallelLinear(nn.Module):
         if scale:
             self.scale = nn.Parameter(torch.ones(self.linear.out_features))
 
+        self.tie_weight_key = "linear.weight"
+
     def init_weights(self):
         init_weights(self.linear, self.linear_init)
 

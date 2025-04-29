@@ -13,11 +13,23 @@ def convert_state_dict(state_dict, mapping, reverse=False):
     for orig_key, tensor in state_dict.items():
         for pattern, convert in mapping.items():
             for attr_key, _ in convert["placement"].items():
+                sub_name = attr_key
+                if "name_map" in convert:
+                    name_map = convert["name_map"]
+
+                    if reverse:
+                        sub_name = name_map[attr_key]
+
+                    else:
+                        name_map = {v: k for k, v in name_map.items()}
+
+                        sub_name = name_map[attr_key]
+
                 if reverse:
-                    find_pattern, count = get_find_pattern(convert["key"], attr_key)
+                    find_pattern, count = get_find_pattern(convert["key"], sub_name)
 
                 else:
-                    find_pattern, count = get_find_pattern(pattern, attr_key)
+                    find_pattern, count = get_find_pattern(pattern, sub_name)
 
                 found = re.findall(f"({find_pattern})", orig_key)
 
