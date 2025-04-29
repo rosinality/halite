@@ -80,3 +80,16 @@ class SwiGLU(nn.Module):
         # but it seems like that it is common to use act(left) * right
         # for SwiGLU. (https://arxiv.org/abs/2002.05202)
         return F.silu(left) * right
+
+
+class GEGLU(nn.Module):
+    def __init__(self, dim=-1, approximate="none"):
+        super().__init__()
+
+        self.dim = dim
+        self.approximate = approximate
+
+    def forward(self, input):
+        left, right = input.chunk(2, dim=-1)
+
+        return F.gelu(left, approximate=self.approximate) * right

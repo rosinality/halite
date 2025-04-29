@@ -48,3 +48,16 @@ class ModuleDict(nn.ModuleDict):
         main_str += "\n  " + "\n  ".join(lines) + "\n"
         main_str += ")"
         return main_str
+
+
+class MultiModule(nn.ModuleDict):
+    def __init__(self, **kwargs):
+        super().__init__(kwargs)
+
+    def forward(self, *args, **kwargs):
+        results = {}
+
+        for key, module in self.items():
+            results[key] = module(*args, **kwargs)
+
+        return results

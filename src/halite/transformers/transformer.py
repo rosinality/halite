@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import time
 from typing import Any, List, Optional
 
 import torch
@@ -14,13 +15,6 @@ from halite.transformers.cache_manager import (
 from halite.transformers.container import ModuleDict
 from halite.transformers.generation import GenerationMixin
 from halite.transformers.model import ModelMixin
-
-
-def get_pos_emb(pos_emb):
-    if hasattr(pos_emb, "attention_bias"):
-        return pos_emb
-
-    return pos_emb()
 
 
 @dataclass
@@ -61,19 +55,9 @@ class TransformerDecoder(nn.Module, GenerationMixin, ModelMixin):
 
         self.attention_mask = attention_mask
 
-        pos_emb_obj = get_pos_emb(pos_embed)
-
-        self.pos_embed_attention_bias = pos_emb_obj.attention_bias
-        self.pos_embed_layer_shared = pos_emb_obj.layer_shared
-
-        if self.pos_embed_layer_shared:
-            self.pos_embed = pos_emb_obj
-
-        else:
-            self.pos_embeds = nn.ModuleList()
-
-            for _ in range(len(blocks)):
-                self.pos_embeds.append(pos_embed())
+        self.pos_embed = pos_embed
+        self.pos_embed_attention_bias = getattr(pos_embed, "attention_bias", False)
+        self.pos_embed_layer_shared = getattr(pos_embed, "layer_shared", True)
 
         self.blocks = ModuleDict()
         for i, block in enumerate(blocks):
@@ -87,6 +71,7 @@ class TransformerDecoder(nn.Module, GenerationMixin, ModelMixin):
 
         self.flex_attention_processor = flex_attention_processor
 
+        self.tie_embeds = tie_embeds
         if tie_embeds and self.head is not None:
             self.head.tie_weight(self.embedding.embed_weight)
 
@@ -96,6 +81,14 @@ class TransformerDecoder(nn.Module, GenerationMixin, ModelMixin):
         self.cache_manager = None
 
         self.config = config
+
+    def state_dict(self, *args, **kwargs):
+        state_dict = super().state_dict(*args, **kwargs)
+
+        if self.tie_embeds:
+            del state_dict["head." + self.head.tie_weight_key]
+
+        return state_dict
 
     def init_weights(self, device):
         def init_weight(module):
@@ -240,16 +233,26 @@ class TransformerDecoder(nn.Module, GenerationMixin, ModelMixin):
 
     def forward(
         self,
-        input_ids,
+        input_ids=None,
         attention_mask=None,
         position_ids=None,
+        images=None,
         cache=None,
         use_cache=False,
         output_hidden_states=False,
+        bidirection_ids=None,
         document_offsets=None,
         target=None,
     ):
-        out = self.embedding(input_ids=input_ids)
+        embedding_input = {}
+
+        if input_ids is not None:
+            embedding_input["input_ids"] = input_ids
+
+        if images is not None:
+            embedding_input["images"] = images
+
+        out = self.embedding(**embedding_input)
 
         if self.post_embed is not None:
             out = self.post_embed(out)
@@ -257,7 +260,7 @@ class TransformerDecoder(nn.Module, GenerationMixin, ModelMixin):
         if cache is None:
             cache = [None] * len(self.blocks)
 
-        query_length = input_ids.shape[1]
+        query_length = out.shape[1]
         key_length = query_length
         past_key_length = 0
 
@@ -278,7 +281,8 @@ class TransformerDecoder(nn.Module, GenerationMixin, ModelMixin):
 
             position_ids = position_ids.view(-1, query_length)
 
-        if self.pos_embed_layer_shared:
+        pos_emb = None
+        if self.pos_embed is not None and self.pos_embed_layer_shared:
             pos_emb = self.get_pos_embed(
                 self.pos_embed,
                 attention_mask,
@@ -307,6 +311,7 @@ class TransformerDecoder(nn.Module, GenerationMixin, ModelMixin):
                 batch=input_ids.shape[0],
                 q_len=query_length,
                 kv_len=key_length,
+                bidirection_ids=bidirection_ids,
                 position_ids=position_ids,
                 document_offsets=document_offsets,
             )

@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -112,7 +114,14 @@ def unpad_qkv(query, key, value, unpad_params):
 
 class SelfAttention(nn.Module):
     def __init__(
-        self, qkv, attention, out, qkv_split="llama", qkv_init=None, out_init=None
+        self,
+        qkv,
+        attention,
+        out,
+        qkv_split="llama",
+        qkv_init=None,
+        out_init=None,
+        layer_type=None,
     ):
         super().__init__()
 
@@ -135,6 +144,7 @@ class SelfAttention(nn.Module):
         )
         self.qkv_init = qkv_init
         self.out_init = out_init
+        self.layer_type = layer_type
 
     def init_weights(self):
         init_weights(self.qkv, self.qkv_init)
@@ -186,6 +196,16 @@ class SelfAttention(nn.Module):
 
         q, k, v = self.qkv_split(qkv)
 
+        if self.layer_type is not None:
+            if isinstance(attention_mask, Mapping):
+                attention_mask = attention_mask[self.layer_type]
+
+            if isinstance(attention_bias, Mapping):
+                attention_bias = attention_bias[self.layer_type]
+
+            if isinstance(pos_emb, Mapping):
+                pos_emb = pos_emb[self.layer_type]
+
         out, next_cache = self.attention(
             q,
             k,
@@ -228,6 +248,9 @@ class SelfAttentionQKV(nn.Module):
         v_init=None,
         out_init=None,
         scaler=None,
+        q_norm=None,
+        k_norm=None,
+        layer_type=None,
     ):
         super().__init__()
 
@@ -251,6 +274,10 @@ class SelfAttentionQKV(nn.Module):
         self.v_init = v_init
         self.out_init = out_init
 
+        self.q_norm = q_norm
+        self.k_norm = k_norm
+        self.layer_type = layer_type
+
     def init_weights(self):
         init_weights(self.q, self.q_init)
         init_weights(self.k, self.k_init)
@@ -269,9 +296,25 @@ class SelfAttentionQKV(nn.Module):
     ):
         q, k, v = self.q(input), self.k(input), self.v(input)
 
+        if self.q_norm is not None:
+            q = self.q_norm(q)
+
+        if self.k_norm is not None:
+            k = self.k_norm(k)
+
         if self.scaler is not None:
             q = self.scaler(q)
             k = self.scaler(k)
+
+        if self.layer_type is not None:
+            if isinstance(attention_mask, Mapping):
+                attention_mask = attention_mask[self.layer_type]
+
+            if isinstance(attention_bias, Mapping):
+                attention_bias = attention_bias[self.layer_type]
+
+            if isinstance(pos_emb, Mapping):
+                pos_emb = pos_emb[self.layer_type]
 
         out, next_cache = self.attention(
             q,
@@ -316,6 +359,8 @@ class Attention(nn.Module):
         processor="auto",
         normalize=True,
         softcap=0.0,
+        q_norm=None,
+        k_norm=None,
         **processor_kwargs,
     ):
         super().__init__()
@@ -341,6 +386,9 @@ class Attention(nn.Module):
         self.apply_pos_emb_fn = apply_pos_emb_fn
         self.softcap = softcap
 
+        self.q_norm = q_norm
+        self.k_norm = k_norm
+
         self.normalize = normalize
         if isinstance(normalize, bool) and normalize:
             self.normalize = 1 / (head_dim**0.5)
@@ -364,8 +412,14 @@ class Attention(nn.Module):
         key = key.view(batch, key_length, -1, self.head_dim)
         value = value.view(batch, key_length, -1, self.head_dim)
 
+        if self.q_norm is not None:
+            query = self.q_norm(query)
+
+        if self.k_norm is not None:
+            key = self.k_norm(key)
+
         if self.apply_pos_emb_fn is not None:
-            query, key = self.apply_pos_emb_fn(query, key, pos_embed, use_fp32=True)
+            query, key = self.apply_pos_emb_fn(query, key, pos_embed)
 
         out, next_cache = self.attention(
             query,
