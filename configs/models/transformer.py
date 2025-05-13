@@ -312,15 +312,27 @@ def transformer_infer(
     intermediate_size,
     context_len,
     n_key_value_heads=None,
-    pos_embed=None,
+    pos_embed="rope",
     pos_embed_apply_fn=None,
     softcap=0.0,
+    is_causal=True,
+    norm=None,
     rms_norm_epsilon=1e-6,
     post_norm=False,
     attention_processor="auto",
+    attention_bias=False,
+    flex_attention_processor=None,
     qkv_split=False,
     gated_ff_split=False,
+    ffn_bias=False,
+    ffn_activation="swiglu",
     infer: str | None = None,
+    embedding=None,
+    q_norm=None,
+    k_norm=None,
+    use_head=True,
+    tie_embeds=False,
+    layer_types=None,
 ):
     if infer is None:
         return partial(patch, patches=())
@@ -335,6 +347,8 @@ def transformer_infer(
             head_dim="$head_dim",
             n_key_value_heads="$n_key_value_heads",
             apply_pos_emb_fn="$apply_pos_emb_fn",
+            q_norm="$q_norm",
+            k_norm="$k_norm",
         )
         .chain(),
         patch_fn.select()

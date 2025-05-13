@@ -211,6 +211,8 @@ class FlashInferAttention(nn.Module):
         head_dim: int,
         n_key_value_heads: int | None = None,
         apply_pos_emb_fn: Callable = None,
+        q_norm=None,
+        k_norm=None,
     ):
         super().__init__()
 
@@ -225,10 +227,19 @@ class FlashInferAttention(nn.Module):
 
         self.apply_pos_emb_fn = apply_pos_emb_fn
 
+        self.q_norm = q_norm
+        self.k_norm = k_norm
+
     def forward(self, query, key, value, batch: Batch, pos_emb=None):
         query = query.view(-1, self.n_heads, self.head_dim)
         key = key.view(-1, self.n_key_value_heads, self.head_dim)
         value = value.view(-1, self.n_key_value_heads, self.head_dim)
+
+        if self.q_norm is not None:
+            query = self.q_norm(query)
+
+        if self.k_norm is not None:
+            key = self.k_norm(key)
 
         if self.apply_pos_emb_fn is not None:
             query, key = self.apply_pos_emb_fn(query, key, pos_emb)

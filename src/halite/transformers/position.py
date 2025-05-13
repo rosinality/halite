@@ -97,6 +97,7 @@ class RotaryEmbedding(nn.Module):
         device=None,
         use_complex=False,
         use_rotate_half=False,
+        pre_init=False,
     ):
         super().__init__()
 
@@ -106,6 +107,7 @@ class RotaryEmbedding(nn.Module):
         self.device = device
         self.use_complex = use_complex
         self.use_rotate_half = use_rotate_half
+        self.pre_init = pre_init
 
         self.init_buffers()
 
@@ -114,7 +116,9 @@ class RotaryEmbedding(nn.Module):
         self.inv_freq = inv_freq
 
         # this can result in different results per device
-        self.init_cache(self.max_position_embeddings, self.device, torch.float32)
+        self.max_seq_len_cached = 0
+        if self.pre_init:
+            self.init_cache(self.max_position_embeddings, self.device, torch.float32)
 
     def get_inv_freq(self):
         inv_freq = 1 / (
@@ -289,8 +293,20 @@ def apply_rotary_emb(query, key, pos_embed, use_fp32=False, use_complex=False):
 
     if isinstance(pos_embed, tuple):
         cos, sin = pos_embed
-        cos = cos.to(query.dtype).unsqueeze(2)
-        sin = sin.to(query.dtype).unsqueeze(2)
+
+        cos = cos.to(query.dtype)
+        sin = sin.to(query.dtype)
+
+        is_infer = query.ndim == 3
+
+        if is_infer:
+            cos = cos.unsqueeze(1)
+            sin = sin.unsqueeze(1)
+
+        else:
+            cos = cos.unsqueeze(2)
+            sin = sin.unsqueeze(2)
+
         q_embed = (query * cos) + (rotate_half(query) * sin)
         k_embed = (key * cos) + (rotate_half(key) * sin)
 
