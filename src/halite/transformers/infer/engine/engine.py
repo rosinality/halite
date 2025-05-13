@@ -89,7 +89,7 @@ class InferenceEngine:
 
             return [
                 InferenceResult(id, input_ids, [output_ids])
-                for id, (input_ids, output_ids) in generated
+                for id, input_ids, output_ids in generated
             ]
 
         prefix_reqs = []

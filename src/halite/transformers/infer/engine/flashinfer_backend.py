@@ -250,6 +250,8 @@ class FlashInferAttention(nn.Module):
         if k is not None:
             batch.kv_pool.set_kv_buffer(self.layer_id, kv_pool_ids, k, v)
 
+        kb, vb = batch.kv_pool.get_kv_buffer(self.layer_id)
+
         o = prefill.run(
             q.contiguous().view(
                 -1, batch.attention_backend.n_qo_heads, batch.attention_backend.head_dim

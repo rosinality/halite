@@ -19,9 +19,15 @@ from halite.logging import logger
 from halite.transformers.convert import convert_checkpoint
 
 
+def copy_if_exists(src, dst, filename):
+    if os.path.exists(os.path.join(src, filename)):
+        shutil.copy(os.path.join(src, filename), os.path.join(dst, filename))
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--conf", type=str)
+    parser.add_argument("--tokenizer_type", type=str, default="sentencepiece")
     parser.add_argument("--tokenizer", type=str, default=None)
     parser.add_argument("--out", type=str)
     parser.add_argument("checkpoint_pattern", type=str)
@@ -68,4 +74,11 @@ if __name__ == "__main__":
             json.dump(conf.tokenizer.to_dict(), f, indent=2)
 
     if args.tokenizer is not None:
-        shutil.copy(args.tokenizer, os.path.join(args.out, "tokenizer.model"))
+        if args.tokenizer_type == "sentencepiece":
+            shutil.copy(args.tokenizer, os.path.join(args.out, "tokenizer.model"))
+
+        elif args.tokenizer_type == "hf":
+            copy_if_exists(args.tokenizer, args.out, "tokenizer.json")
+            copy_if_exists(args.tokenizer, args.out, "tokenizer_config.json")
+            copy_if_exists(args.tokenizer, args.out, "vocab.json")
+            copy_if_exists(args.tokenizer, args.out, "merges.txt")
