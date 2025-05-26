@@ -60,6 +60,21 @@ class Map:
             yield record
 
 
+class ApplyTemplate:
+    def __init__(self, key, template):
+        self.key = key
+
+        from halite.projects.common.template import get_render_fn
+
+        self.template = get_render_fn(template)
+
+    def __call__(self, iterator):
+        for record in iterator:
+            record[self.key] = self.template(record)
+
+            yield record
+
+
 class Tokenize:
     def __init__(self, tokenizer, keys=("text",), output_keys=None, **tokenizer_kwargs):
         self.tokenizer = tokenizer
@@ -151,6 +166,10 @@ class AutoregressiveSample:
             record["target"] = record[self.key][1:]
 
             yield record
+
+
+def collate_list(batch):
+    return batch
 
 
 class Collator:
