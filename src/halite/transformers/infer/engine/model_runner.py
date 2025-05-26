@@ -113,6 +113,7 @@ class ModelRunner:
         self.attention_backend.initialize()
 
     def cleanup(self):
+        self.model.to("meta")
         self.request_to_token_pool.cleanup()
         self.kv_pool.cleanup()
         self.attention_backend.cleanup()
