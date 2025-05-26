@@ -44,3 +44,32 @@ class Record(dict):
                 new_record[k] = v
 
         return new_record
+
+    def unbind(self, keys=None):
+        field_length = -1
+
+        for key in keys:
+            val = self[key]
+
+            if isinstance(val, Sequence):
+                if field_length != -1 and field_length != len(val):
+                    raise ValueError("all fields must have the same length")
+
+                field_length = len(val)
+
+        records = []
+        for i in range(field_length):
+            record = Record()
+
+            for key in keys:
+                val = self[key]
+
+                if isinstance(val, Sequence):
+                    record[key] = val[i]
+
+                else:
+                    record[key] = val
+
+            records.append(record)
+
+        return records
