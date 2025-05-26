@@ -105,7 +105,7 @@ class Llama3Tokenizer:
         self.additional_stop_token_ids = set()
 
     def postprocess_tokens(
-        self, tokens: Sequence[int], bos: bool = True, eos: bool = False
+        self, tokens: Sequence[int], bos: bool = False, eos: bool = False
     ):
         if bos:
             tokens.insert(0, self.bos_id)
