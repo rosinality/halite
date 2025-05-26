@@ -159,7 +159,16 @@ class MapDataset(data.Dataset):
         for op in self.operations:
             record = op(record)
 
-        return next(record)
+        return next(iter(record))
+
+
+def HFDataset(path, name=None, split="test", operations=None):
+    from datasets import load_dataset
+
+    return MapDataset(
+        [load_dataset(path, name, split=split, trust_remote_code=True)],
+        operations=operations,
+    )
 
 
 class WeightedIterableDataset(data.IterableDataset):

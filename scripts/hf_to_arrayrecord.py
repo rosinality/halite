@@ -112,8 +112,8 @@ def write_arrayrecord(
         for writer in shard_writer:
             writer.close()
 
-        for name, total in zip(shard_names, total_samples):
-            split_conf["shards"][dataset_name][name] = total
+        for split_name, total in zip(shard_names, total_samples):
+            split_conf["shards"][dataset_name][split_name] = total
 
         dataset_conf[split] = split_conf
 
