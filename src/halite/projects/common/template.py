@@ -1,4 +1,3 @@
-import collections
 from typing import Callable
 
 from jinja2 import Environment, StrictUndefined
