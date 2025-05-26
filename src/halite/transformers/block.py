@@ -97,8 +97,6 @@ class NGPTBlock(nn.Module):
         if isinstance(out, tuple):
             out, *rest = out
 
-        import torch
-
         if self.post_norm is not None:
             out = self.post_norm(out)
 

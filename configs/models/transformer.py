@@ -429,6 +429,15 @@ def use_flex_attention(model_conf):
 
 
 @config_fn
+def use_flash_attention(model_conf):
+    conf = (
+        select(model_conf).instance(Attention).update_dict(dict(processor="flash_attn"))
+    )
+
+    return conf
+
+
+@config_fn
 def use_fused_linear_cross_entropy(model_conf, ignore_index=-100, z_loss=0):
     conf = (
         select(model_conf)

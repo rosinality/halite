@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from typing import NamedTuple
 
 import torch
 from torch import nn
@@ -18,9 +19,11 @@ except ImportError:
 
 try:
     from flash_attn import flash_attn_func, flash_attn_varlen_func
-    from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input
+    from flash_attn.bert_padding import index_first_axis, pad_input
 
 except ImportError:
+    pad_input = None
+
     pass
 
 from halite.transformers.initialize import init_weights
@@ -44,19 +47,48 @@ class AttentionCache:
         return AttentionCache(key, value, self.length, self.n_head)
 
 
+class UnpadParams(NamedTuple):
+    batch: int
+    seqlen: int
+    indices_q: torch.Tensor
+    cu_seqlens_q: torch.Tensor
+    max_length_q: int
+    indices_k: torch.Tensor
+    cu_seqlens_k: torch.Tensor
+    max_length_k: int
+
+
 def unpad_params(padding_mask):
     lengths = padding_mask.sum(-1, dtype=torch.int32)
     indices = torch.nonzero(padding_mask.flatten(), as_tuple=False).flatten()
     max_length = lengths.max().item()
     cu_seqlens = F.pad(torch.cumsum(lengths, 0, dtype=torch.int32), (1, 0))
 
-    return indices, cu_seqlens, max_length
+    return UnpadParams(
+        padding_mask.shape[0],
+        padding_mask.shape[-1],
+        indices,
+        cu_seqlens,
+        max_length,
+        indices,
+        cu_seqlens,
+        max_length,
+    )
 
 
-def build_unpad_params(padding_mask, batch_size, query_len, key_len):
+def unpad_input(tensor, indices):
+    if tensor.ndim < 3:
+        tensor = tensor.unsqueeze(-1)
+
+    return index_first_axis(
+        tensor.reshape(tensor.shape[0] * tensor.shape[1], *tensor.shape[2:]), indices
+    )
+
+
+def build_unpad_params(padding_mask, query_len, key_len=None, batch_size=None):
     indices_k, cu_seqlens_k, max_length_k = unpad_params(padding_mask)
 
-    if query_len == key_len:
+    if key_len is None or query_len == key_len:
         cu_seqlens_q = cu_seqlens_k
         max_length_q = max_length_k
         indices_q = indices_k
@@ -72,7 +104,9 @@ def build_unpad_params(padding_mask, batch_size, query_len, key_len):
         padding_mask = padding_mask[:, -query_len:]
         indices_q, cu_seqlens_q, max_length_q = unpad_params(padding_mask)
 
-    return indices_q, cu_seqlens_q, max_length_q, indices_k, cu_seqlens_k, max_length_k
+    return UnpadParams(
+        indices_q, cu_seqlens_q, max_length_q, indices_k, cu_seqlens_k, max_length_k
+    )
 
 
 def unpad_qkv(query, key, value, unpad_params):
@@ -473,7 +507,15 @@ class Attention(nn.Module):
             query, key, value, attention_mask, attention_bias, cache, use_cache
         )
 
-    def attention_flash(self, query, key, value, cache, use_cache, unpad_params=None):
+    def attention_flash(
+        self,
+        query,
+        key,
+        value,
+        cache,
+        use_cache,
+        unpad_params: UnpadParams | None = None,
+    ):
         if cache is not None:
             key, value = cache.get(key, value)
 
@@ -483,32 +525,20 @@ class Attention(nn.Module):
             next_cache = (key, value)
 
         if unpad_params is not None:
-            batch, length = query.shape[:2]
-            (
-                query,
-                key,
-                value,
-                indices_q,
-                cu_seqlens_q,
-                cu_seqlens_k,
-                max_length_q,
-                max_length_k,
-            ) = unpad_qkv(query, key, value, unpad_params)
             out = flash_attn_varlen_func(
-                query,
-                key,
-                value,
-                cu_seqlens_q,
-                cu_seqlens_k,
-                max_seqlen_q=max_length_q,
-                max_seqlen_k=max_length_k,
+                query.squeeze(0),
+                key.squeeze(0),
+                value.squeeze(0),
+                unpad_params.cu_seqlens_q,
+                unpad_params.cu_seqlens_k,
+                max_seqlen_q=unpad_params.max_length_q,
+                max_seqlen_k=unpad_params.max_length_k,
                 dropout_p=self.attn_drop_p if self.training else 0,
                 causal=self.is_causal,
                 softmax_scale=self.normalize,
                 softcap=self.softcap,
                 **self.attention_kwargs,
             )
-            out = pad_input(out, indices_q, batch, length)
 
         else:
             out = flash_attn_func(
@@ -820,7 +850,15 @@ class DiffAttention(nn.Module):
             query, key, value, attention_mask, attention_bias, cache, use_cache
         )
 
-    def attention_flash(self, query, key, value, cache, use_cache, unpad_params=None):
+    def attention_flash(
+        self,
+        query,
+        key,
+        value,
+        cache,
+        use_cache,
+        unpad_params: UnpadParams | None = None,
+    ):
         if cache is not None:
             key, value = cache.get(key, value)
 
@@ -830,32 +868,20 @@ class DiffAttention(nn.Module):
             next_cache = (key, value)
 
         if unpad_params is not None:
-            batch, length = query.shape[:2]
-            (
-                query,
-                key,
-                value,
-                indices_q,
-                cu_seqlens_q,
-                cu_seqlens_k,
-                max_length_q,
-                max_length_k,
-            ) = unpad_qkv(query, key, value, unpad_params)
             out = flash_attn_varlen_func(
-                query,
-                key,
-                value,
-                cu_seqlens_q,
-                cu_seqlens_k,
-                max_seqlen_q=max_length_q,
-                max_seqlen_k=max_length_k,
+                query.squeeze(0),
+                key.squeeze(0),
+                value.squeeze(0),
+                unpad_params.cu_seqlens_q,
+                unpad_params.cu_seqlens_k,
+                max_seqlen_q=unpad_params.max_length_q,
+                max_seqlen_k=unpad_params.max_length_k,
                 dropout_p=self.attn_drop_p if self.training else 0,
                 causal=self.is_causal,
                 softmax_scale=self.normalize,
                 softcap=self.softcap,
                 **self.attention_kwargs,
             )
-            out = pad_input(out, indices_q, batch, length)
 
         else:
             out = flash_attn_func(
