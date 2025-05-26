@@ -1,0 +1,136 @@
+import torch
+from torch.nn import functional as F
+
+from halite.projects.common.rollout import (
+    RolloutGenerator,
+    Handler,
+    Request,
+    RewardRegistry,
+)
+from halite.projects.common.rollout_fn import Compose, ToTokenReward
+from halite.projects.ppo.trainer import PPOTrainer, compute_grpo_advantage
+from halite.transformers.infer.engine.engine import InferenceResult
+
+
+class InferenceEngineMock:
+    def initialize(self):
+        pass
+
+    def infer_batch(self, requests):
+        return [
+            InferenceResult(
+                id=0,
+                input_ids=[1, 2, 3, 4, 5],
+                output_ids=[[6, 7, 8], [6, 7, 8, 9, 10], [1, 2]],
+            ),
+            InferenceResult(
+                id=1,
+                input_ids=[6, 7, 8],
+                output_ids=[[1, 2, 3, 4, 5], [6, 7], [8, 9, 10]],
+            ),
+        ]
+
+
+class RewardMock:
+    def __call__(self, data):
+        rewards = []
+
+        for i in range(len(data)):
+            rewards.append(i + 1)
+
+        return torch.tensor(rewards, dtype=torch.float32)
+
+
+def log_probs_from_logits(logits, labels, ignore_index, temperature=1.0):
+    if isinstance(temperature, torch.Tensor) or temperature != 1.0:
+        logits = logits / temperature.reshape(-1, 1, 1)
+
+    return -F.cross_entropy(
+        logits.permute(0, 2, 1), labels, reduction="none", ignore_index=ignore_index
+    )
+
+
+def entropy_from_logits(logits, temperature=1.0):
+    if temperature != 1.0:
+        logits = logits / temperature.reshape(-1, 1, 1)
+
+    return -torch.sum(torch.softmax(logits, -1) * torch.log_softmax(logits, -1), -1)
+
+
+class ActorMock:
+    def __call__(self, data):
+        response_len = data.response_ids.shape[-1]
+
+        logits = (
+            torch.arange(data.input_ids.numel() * 11, dtype=torch.float32).reshape(
+                *data.input_ids.shape, 11
+            )
+            / 100
+        )
+
+        logits = logits.detach()
+        logits.requires_grad = True
+        self.logits = logits
+        logits = logits[:, response_len - 1 : -1]
+
+        return log_probs_from_logits(
+            logits, data.response_ids, -1, data.temperatures
+        ), entropy_from_logits(
+            logits,
+            data.temperatures,
+        )
+
+
+if __name__ == "__main__":
+    inference_engine = InferenceEngineMock()
+
+    reward_handler = Handler(
+        "mock",
+        RewardMock(),
+        args=("output_ids",),
+        targets="*",
+    )
+
+    rollout_generator = RolloutGenerator(
+        inference_engine,
+        RewardRegistry(
+            reward_handler,
+            postprocess=Compose(ToTokenReward("output_ids", "mock", "token_rewards")),
+        ),
+    )
+
+    rollout_generator.initialize()
+
+    question1 = "\int_{-\infty}^{\infty} e^{-x^2} \,dx = "
+    question2 = "125 + 235 = "
+
+    rollout = rollout_generator.generate(
+        [
+            Request(
+                question1,
+                "math",
+                {"max_new_tokens": 512, "n": 4},
+                {"input_text": question1},
+            ),
+            Request(
+                question2,
+                "arithmetic",
+                {"max_new_tokens": 512, "n": 4},
+                {"input_text": question2},
+            ),
+        ],
+    )
+
+    actor = ActorMock()
+    trainer = PPOTrainer(
+        actor,
+        compute_grpo_advantage,
+    )
+
+    rollout = trainer.compute_advantage(rollout)
+    pg_loss, pg_clipfrac = trainer.compute_actor_loss(rollout)
+
+    print(rollout)
+    print(pg_loss, pg_clipfrac)
+    pg_loss.backward()
+    print(actor.logits.grad.abs().max(-1).values)
