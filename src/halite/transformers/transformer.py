@@ -7,11 +7,7 @@ from torch import nn, utils
 
 from slickconf import Field
 
-from halite.transformers.attention import build_unpad_params
-from halite.transformers.cache_manager import (
-    AllocatedCacheManager,
-    BasicCacheManager,
-)
+from halite.transformers.cache_manager import AllocatedCacheManager
 from halite.transformers.container import ModuleDict
 from halite.transformers.generation import GenerationMixin
 from halite.transformers.model import ModelMixin
@@ -67,7 +63,6 @@ class TransformerDecoder(nn.Module, GenerationMixin, ModelMixin):
         self.head = head
 
         self.use_position_ids = use_position_ids
-        self.flash_attn = attention_processor == "flash_attn"
 
         self.flex_attention_processor = flex_attention_processor
 
@@ -89,6 +84,20 @@ class TransformerDecoder(nn.Module, GenerationMixin, ModelMixin):
             del state_dict["head." + self.head.tie_weight_key]
 
         return state_dict
+
+    def load_state_dict(self, state_dict, strict=True, assign=False):
+        if self.tie_embeds:
+            state_dict["head." + self.head.tie_weight_key] = state_dict[
+                "embedding." + self.embedding.tie_weight_key
+            ]
+
+        super().load_state_dict(state_dict, strict, assign)
+
+    def to_empty(self, *args, **kwargs):
+        super().to_empty(*args, **kwargs)
+
+        if self.tie_embeds and self.head is not None:
+            self.head.tie_weight(self.embedding.embed_weight)
 
     def init_weights(self, device):
         def init_weight(module):
@@ -243,6 +252,7 @@ class TransformerDecoder(nn.Module, GenerationMixin, ModelMixin):
         bidirection_ids=None,
         document_offsets=None,
         target=None,
+        unpad_params=None,
     ):
         embedding_input = {}
 
@@ -261,14 +271,13 @@ class TransformerDecoder(nn.Module, GenerationMixin, ModelMixin):
             cache = [None] * len(self.blocks)
 
         query_length = out.shape[1]
+
         key_length = query_length
         past_key_length = 0
 
         if cache[0] is not None:
             past_key_length = cache[0].length
             key_length += past_key_length
-
-        unpad_params = None
 
         if self.use_position_ids:
             if position_ids is None:
@@ -278,8 +287,6 @@ class TransformerDecoder(nn.Module, GenerationMixin, ModelMixin):
                     device=out.device,
                 )
                 position_ids = position_ids.unsqueeze(0)
-
-            position_ids = position_ids.view(-1, query_length)
 
         pos_emb = None
         if self.pos_embed is not None and self.pos_embed_layer_shared:
@@ -293,11 +300,6 @@ class TransformerDecoder(nn.Module, GenerationMixin, ModelMixin):
             )
 
         if attention_mask is not None:
-            if self.flash_attn:
-                unpad_params = build_unpad_params(
-                    attention_mask, input_ids.shape[1], query_length, key_length
-                )
-
             attention_mask = self.get_attention_mask(
                 attention_mask,
                 input_ids.shape[1],
