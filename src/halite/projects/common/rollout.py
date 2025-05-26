@@ -1,10 +1,19 @@
-from collections.abc import Sequence
 from collections import defaultdict
-from typing import Any, Callable
+from random import Random
+from typing import Any, Callable, NamedTuple
 
 import torch
 
+from halite.data.record import Record
+from halite.projects.common.param import Param
 from halite.transformers.infer.engine.engine import InferenceEngine
+
+
+class Rollouts(NamedTuple):
+    samples: list[dict[str, Any]]
+    rewards: torch.Tensor
+    rewards_dict: dict[str, torch.Tensor]
+    sampling_params: list[dict[str, Any]]
 
 
 class Handler:
@@ -23,6 +32,13 @@ class Handler:
         self.targets = targets
         self.preprocess = preprocess
         self.reward_padding = reward_padding
+
+
+class Request(NamedTuple):
+    prompt: str
+    type: str
+    sampling_params: dict[str, Any] = {}
+    meta: dict[str, Any] = {}
 
 
 class RewardRegistry:
@@ -71,7 +87,7 @@ class RewardRegistry:
             rewards_dict[handler.name] = handler_rewards
 
         if self.postprocess is not None:
-            rewards = self.postprocess(rewards_dict)
+            rewards, rewards_dict = self.postprocess(rewards_dict, data, types)
 
         else:
             rewards = next(iter(rewards_dict.values()))
@@ -79,33 +95,65 @@ class RewardRegistry:
         return rewards, rewards_dict
 
 
-class Detokenize:
+class RequestBuilder:
     def __init__(
         self,
-        tokenizer: Any,
-        keys=("output_ids",),
-        output_keys=("output_texts",),
-        **tokenizer_kwargs,
+        prompt_key: str,
+        sampling_params: dict[str, Any],
+        type: str | None = None,
+        type_key: str | None = None,
+        meta_maps: dict[str, str] | None = None,
+        seed=None,
     ):
-        self.tokenizer = tokenizer
-        self.keys = keys
-        self.output_keys = output_keys
-        self.tokenizer_kwargs = tokenizer_kwargs
+        self.prompt_key = prompt_key
+        self.sampling_params = sampling_params
 
-    def __call__(self, data):
-        for i, key in enumerate(self.keys):
-            if key not in data:
-                continue
+        if type is not None and type_key is not None:
+            raise ValueError("type and type_key cannot both be provided")
 
-            target_key = self.output_keys[i] if self.output_keys else key
+        if type is None and type_key is None:
+            raise ValueError("type or type_key must be provided")
 
-            detokenized = [
-                self.tokenizer.decode(row, **self.tokenizer_kwargs) for row in data[key]
-            ]
+        self.type = type
+        self.type_key = type_key
+        self.meta_maps = meta_maps
+        self.random = Random(seed)
 
-            data[target_key] = detokenized
+    def __call__(self, batch: Record):
+        target_keys = {self.prompt_key, *self.meta_maps.values()}
+        if self.type_key is not None:
+            target_keys.add(self.type_key)
 
-        return data
+        requests = []
+        records = batch.unbind(target_keys)
+
+        for record in records:
+            prompt = record[self.prompt_key]
+            sampling_param = self.sample_sampling_params()
+
+            if self.type is not None:
+                type = self.type
+
+            else:
+                type = record[self.type_key]
+
+            meta = {k: record[v] for k, v in self.meta_maps.items()}
+
+            requests.append(Request(prompt, type, sampling_param, meta))
+
+        return requests
+
+    def sample_sampling_params(self):
+        sampled_params = {}
+
+        for k, v in self.sampling_params.items():
+            if isinstance(v, Param):
+                sampled_params[k] = v.sample(self.random)
+
+            else:
+                sampled_params[k] = v
+
+        return sampled_params
 
 
 class RolloutGenerator:
@@ -128,16 +176,24 @@ class RolloutGenerator:
     def load_state_dict(self, state_dict, assign=True):
         self.inference_engine.load_state_dict(state_dict, assign=assign)
 
-    def generate(self, requests, types, batch):
-        samples = self.inference_engine.infer_batch(requests)
+    def generate(self, requests: list[Request]):
+        infer_requests = [
+            [request.prompt, request.sampling_params] for request in requests
+        ]
+
+        samples = self.inference_engine.infer_batch(infer_requests)
 
         data = []
         for sample in samples:
             data.append(sample.to_dict())
 
+        samples_expand = []
+        request_types = []
+        sampling_params = []
+
         for i in range(len(data)):
             row = data[i]
-            batch_row = batch.slice(i)
+            batch_row = requests[i].meta
 
             assert set(batch_row.keys()).isdisjoint(
                 set(row.keys())
@@ -145,14 +201,21 @@ class RolloutGenerator:
 
             row.update(batch_row)
 
+            for output in row["output_ids"]:
+                expanded_row = row.copy()
+                expanded_row["output_ids"] = output
+                sampling_params.append(requests[i].sampling_params)
+                samples_expand.append(expanded_row)
+                request_types.append(requests[i].type)
+
         preprocessed_data = []
 
-        for sample in data:
+        for sample in samples_expand:
             for preprocessor in self.preprocessors:
                 sample = preprocessor(sample)
 
             preprocessed_data.append(sample)
 
-        rewards, rewards_dict = self.reward_registry(preprocessed_data, types)
+        rewards, rewards_dict = self.reward_registry(preprocessed_data, request_types)
 
-        return samples, rewards, rewards_dict
+        return Rollouts(preprocessed_data, rewards, rewards_dict, sampling_params)

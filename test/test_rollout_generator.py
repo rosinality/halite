@@ -4,16 +4,15 @@ from slickconf import load_config, instantiate
 import torch.distributed.checkpoint as dcp
 import torch
 
-from halite.data.record import Record
 from halite.transformers.infer import InferenceEngine, ModelConfig
-from halite.data.tokenizers.llama3 import Llama3Tokenizer
 
 from halite.projects.common.rollout import (
     RolloutGenerator,
     Handler,
-    Detokenize,
+    Request,
     RewardRegistry,
 )
+from halite.projects.common.rollout_fn import Compose, Detokenize, ToTokenReward
 
 
 class LengthPenalty:
@@ -23,16 +22,13 @@ class LengthPenalty:
     def __call__(self, data):
         rewards = []
 
-        for row in data:
-            row_rewards = []
+        for sample in data:
+            try:
+                start = sample.index(self.eos_text)
+                row_rewards = 1 / (start + 1)
 
-            for sample in row:
-                try:
-                    start = sample.index(self.eos_text)
-                    row_rewards.append(1 / (start + 1))
-
-                except ValueError:
-                    row_rewards.append(-1)
+            except ValueError:
+                row_rewards = -1
 
             rewards.append(row_rewards)
 
@@ -59,7 +55,7 @@ if __name__ == "__main__":
         checkpoint_id=args.checkpoint,
     )
 
-    tokenizer = Llama3Tokenizer(args.tokenizer)
+    tokenizer = instantiate(conf.tokenizer, args.tokenizer)
 
     inference_engine = InferenceEngine(
         model.to(device="cuda", dtype=torch.bfloat16),
@@ -75,14 +71,19 @@ if __name__ == "__main__":
 
     length_penalty = Handler(
         "length_penalty",
-        LengthPenalty("<|end_of_text|>"),
+        LengthPenalty("\\boxed"),
         args=("output_texts",),
         targets="*",
     )
 
     rollout_generator = RolloutGenerator(
         inference_engine,
-        RewardRegistry(length_penalty),
+        RewardRegistry(
+            length_penalty,
+            postprocess=Compose(
+                ToTokenReward("output_ids", "length_penalty", "token_rewards")
+            ),
+        ),
         preprocessors=[Detokenize(tokenizer)],
     )
 
@@ -93,17 +94,19 @@ if __name__ == "__main__":
 
     rollout = rollout_generator.generate(
         [
-            [
+            Request(
                 question1,
-                {"max_new_tokens": 1024, "n": 64},
-            ],
-            [
+                "math",
+                {"max_new_tokens": 512, "n": 4},
+                {"input_text": question1},
+            ),
+            Request(
                 question2,
-                {"max_new_tokens": 1024, "n": 64},
-            ],
+                "arithmetic",
+                {"max_new_tokens": 512, "n": 4},
+                {"input_text": question2},
+            ),
         ],
-        types=["math", "arithmetic"],
-        batch=Record({"input_text": [question1, question2]}),
     )
 
     print(rollout)
