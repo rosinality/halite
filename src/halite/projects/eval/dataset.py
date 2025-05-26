@@ -1,4 +1,4 @@
-def hf_dataset(path, name, split="test"):
+def hf_dataset(path, name=None, split="test"):
     from datasets import load_dataset
 
     return load_dataset(path, name, split=split, trust_remote_code=True)
