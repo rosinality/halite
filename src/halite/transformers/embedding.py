@@ -20,6 +20,8 @@ class TextEmbedding(nn.Module):
         self.embed_init = embed_init
         self.multiplier = multiplier
 
+        self.tie_weight_key = "embed_input_ids.weight"
+
     def init_weights(self):
         if self.embed_init is not None:
             self.embed_init(self.embed_input_ids.weight)
