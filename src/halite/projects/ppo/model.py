@@ -7,7 +7,7 @@ except ImportError:
     pass
 
 from halite.nn.entropy import entropy_from_logits
-from halite.projects.ppo.trainer import Batch
+from halite.projects.ppo.types import Batch
 from halite.transformers.attention import (
     unpad_input,
     unpad_params,

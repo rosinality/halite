@@ -101,3 +101,29 @@ def truncate_penalty(samples, rewards, eoc_token_id, penalty):
     rewards[mask] = penalty
 
     return penalty
+
+
+def aggregate_loss(loss, mask, mode, max_tokens=None):
+    if mode == "token-mean":
+        return masked_mean(loss, mask)
+
+    elif mode == "token-mean-seq-mean":
+        loss = torch.sum(loss * mask, -1) / mask.sum(-1)
+
+        return loss.mean()
+
+    elif mode == "token-sum":
+        batch_size = loss.shape[0]
+
+        loss = torch.sum(loss * mask)
+
+        if max_tokens is not None:
+            loss = loss / (max_tokens * batch_size)
+
+        else:
+            loss = loss / batch_size
+
+        return loss
+
+    else:
+        raise ValueError(f"Invalid mode: {mode}")
