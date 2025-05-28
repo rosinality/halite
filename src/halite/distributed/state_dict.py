@@ -1,6 +1,8 @@
+import torch
 from torch.distributed.tensor import distribute_tensor, DTensor
 
 
+@torch.no_grad()
 def reshard_state_dict(
     source_state_dict: dict, target_state_dict: dict, strip_fsdp_prefix: bool = True
 ):
@@ -15,6 +17,15 @@ def reshard_state_dict(
         tensor = source_state_dict[k].to(target_tensor.dtype)
 
         if isinstance(tensor, DTensor):
+            if isinstance(target_tensor, DTensor):
+                tensor = tensor.redistribute(
+                    target_tensor.device_mesh, target_tensor.placements
+                )
+
+                resharded[k] = tensor
+
+                continue
+
             tensor = tensor.full_tensor()
 
         if isinstance(target_tensor, DTensor):
