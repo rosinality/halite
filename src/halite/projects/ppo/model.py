@@ -53,7 +53,7 @@ class UnpaddedModel(ModelWrapper):
         input_ids = unpad_input(batch.input_ids, unpad.indices_q).transpose(0, 1)
         position_ids = unpad_input(batch.position_ids, unpad.indices_q).transpose(0, 1)
 
-        out = self.model(input_ids, position_ids=position_ids)
+        out = self.model(input_ids, position_ids=position_ids, unpad_params=unpad)
 
         logits = out.logits.reshape(-1, out.logits.shape[-1])
 
@@ -79,8 +79,10 @@ class UnpaddedModel(ModelWrapper):
         )
 
         log_probs = pad_input(
-            log_probs.unsqueeze(-1), unpad.indices_q, unpad.batch, unpad.seqlen
+            -log_probs.unsqueeze(-1), unpad.indices_q, unpad.batch, unpad.seqlen
         ).squeeze(-1)
+
+        response_len = batch.response_ids.shape[-1]
 
         entropy = None
 
@@ -89,7 +91,6 @@ class UnpaddedModel(ModelWrapper):
             entropy = pad_input(
                 entropy.unsqueeze(-1), unpad.indices_q, unpad.batch, unpad.seqlen
             ).squeeze(-1)
+            entropy = entropy[:, -response_len - 1 : -1]
 
-        response_len = batch.response_ids.shape[-1]
-
-        return log_probs[:, -response_len - 1 : -1], entropy[:, -response_len - 1 : -1]
+        return log_probs[:, -response_len - 1 : -1], entropy
