@@ -1,4 +1,5 @@
 import gc
+import os
 
 import torch
 from torch import nn
@@ -28,6 +29,13 @@ from halite.utils import get_torch_dtype
 def clean_memory():
     gc.collect()
     torch.cuda.empty_cache()
+
+
+def detach(input):
+    if isinstance(input, torch.Tensor):
+        return input.detach()
+
+    return input
 
 
 def build_rollout_report(conf, rollout):
@@ -80,6 +88,7 @@ def train(
     train_iter = len(train_loader)
 
     step = 0
+
     while True:
         try:
             batch = next(loader)
@@ -88,6 +97,8 @@ def train(
             break
 
         batch = batch.to(device)
+
+        clean_memory()
 
         rollout_generator.initialize()
         rollout_generator.load_state_dict(trainer.actor.state_dict())
@@ -105,21 +116,30 @@ def train(
         if conf.training.ppo_minibatch_size is not None:
             rollout_batches = rollout.split(conf.training.ppo_minibatch_size)
 
-        n_minibatches = len(rollout_batches)
-
         metrics = []
-        for ppo_epoch in range(conf.training.ppo_n_epochs):
-            optimizer.zero_grad()
+        for _ in range(conf.training.ppo_n_epochs):
+            optimizer.zero_grad(set_to_none=True)
 
             for rollout_batch in rollout_batches:
-                actor_loss = trainer.compute_actor_loss(rollout_batch)
+                rollout_microbatches = [rollout_batch]
 
-                (actor_loss.pg_loss / n_minibatches).backward()
+                if conf.training.ppo_microbatch_size is not None:
+                    rollout_microbatches = rollout_batch.split(
+                        conf.training.ppo_microbatch_size
+                    )
 
-                with torch.no_grad():
-                    loss_dict = actor_loss.metric_dict()
+                n_microbatches = len(rollout_microbatches)
+
+                for rollout_microbatch in rollout_microbatches:
+                    actor_loss = trainer.compute_actor_loss(rollout_microbatch)
+
+                    (actor_loss.loss / n_microbatches).backward()
+
+                    loss_dict = {
+                        k: detach(v) for k, v in actor_loss.metric_dict().items()
+                    }
                     loss_dict["sample/response_len/mean"] = (
-                        rollout_batch.batch.response_len.float().mean()
+                        rollout_microbatch.batch.response_len.float().mean()
                     )
 
                     metrics.append(loss_dict)
@@ -135,6 +155,11 @@ def train(
             scheduler.step()
             optimizer.step()
 
+        if global_step == 0:
+            logger.info(
+                f"ppo epochs: {conf.training.ppo_n_epochs}, minibatches: {len(rollout_batches)}, microbatches: {n_microbatches}"
+            )
+
         if conf.ppo.report is not None and global_step % conf.ppo.report.log_step == 0:
             logger.info(build_rollout_report(conf.ppo.report, rollout))
 
@@ -145,7 +170,7 @@ def train(
                     if k not in metrics_mean:
                         metrics_mean[k] = []
 
-                    metrics_mean[k].append(v)
+                    metrics_mean[k].append(torch.as_tensor(v, dtype=torch.float32))
 
             metrics_mean = {k: torch.stack(v).mean() for k, v in metrics_mean.items()}
 
@@ -242,6 +267,7 @@ def main():
     )
     pdims.initialize()
     mesh = pdims.build_mesh("cuda")
+    local_rank = int(os.getenv("LOCAL_RANK", "0"))
     logger = get_logger(mesh)
 
     logger.info(summarize(conf))
@@ -300,8 +326,10 @@ def main():
             head_dim=conf.ppo.actor.model_conf.head_dim,
             n_layers=conf.ppo.actor.model_conf.n_layers,
             context_len=conf.ppo.actor.model_conf.context_len,
-            memory_fraction_static=0.6,
+            memory_fraction_static=conf.ppo.inference.memory_fraction,
             kv_cache_dtype=get_torch_dtype(conf.ppo.infer_dtype),
+            gpu_id=local_rank,
+            distributed=True,
         ),
     )
 
