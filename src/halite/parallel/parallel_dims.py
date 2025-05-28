@@ -31,16 +31,18 @@ class ParallelDims:
     def is_primary(self):
         return dist.get_rank() == 0
 
-    def initialize():
+    def initialize(self):
         local_rank = int(os.getenv("LOCAL_RANK", "0"))
 
         backend = "gloo"
+        device_id = None
 
         if torch.cuda.is_available():
             torch.cuda.set_device(torch.cuda.device(local_rank))
-            backend = "nccl"
+            backend = "cpu:gloo,cuda:nccl"
+            device_id = torch.device(f"cuda:{local_rank}")
 
-        dist.init_process_group(backend)
+        dist.init_process_group(backend, device_id=device_id)
 
     def build_mesh(self, device):
         dims = []

@@ -251,6 +251,13 @@ class Output(Config):
     # path to the directory which output checkpoint would be saved.
     output_dir: StrictStr | None = None
 
+    # separately sets wandb logging frequency
+    wandb_log_step: StrictInt | None = None
+
+    def model_post_init(self, __context):
+        if self.wandb_log_step is None:
+            self.wandb_log_step = self.log_step
+
 
 class Experiment(Config):
     conf: dict[str, Any] | None = None
