@@ -97,7 +97,7 @@ class MHAKVPool(KVPool):
             self.head_dim,
             dtype=self.dtype,
             device=self.device,
-        )
+        ).unbind(0)
 
         self.is_in_free_group = False
         self.free_slots = torch.arange(
