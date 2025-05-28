@@ -1,5 +1,6 @@
 from collections import defaultdict
 import heapq
+import time
 
 import torch
 
@@ -11,6 +12,7 @@ class Node:
         self.key = key
         self.value = value
         self.lock_ref = 0
+        self.last_access_time = time.monotonic()
 
     def set(self, key, value):
         self.key = key
@@ -18,6 +20,9 @@ class Node:
 
     def add_child(self, key, node):
         self.childs[key] = node
+
+    def __lt__(self, other: "Node"):
+        return self.last_access_time < other.last_access_time
 
 
 def match_key(key1, key2):
@@ -61,6 +66,8 @@ class RadixCache:
         return self._insert(self.root, key, value)
 
     def _insert(self, node, key, value):
+        node.last_access_time = time.monotonic()
+
         if len(key) == 0:
             return 0
 
@@ -229,6 +236,8 @@ class RadixCache:
         return value, last_node[0]
 
     def _match(self, node, key, value, last_node):
+        node.last_access_time = time.monotonic()
+
         if len(key) == 0:
             return
 
