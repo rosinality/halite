@@ -1,3 +1,4 @@
+from curses import tigetflag
 from dataclasses import dataclass
 
 import torch
@@ -5,7 +6,7 @@ import torch
 from halite.distributed.state_dict import reshard_state_dict
 from halite.transformers.infer.engine.sampler import Sampler
 from halite.transformers.infer.engine.memory_pool import RequestToTokenPool, MHAKVPool
-from halite.transformers.infer.engine.device import get_available_gpu_memory
+from halite.transformers.infer.engine.device import get_gpu_memory
 from halite.transformers.infer.engine.flashinfer_backend import FlashInferBackend
 
 
@@ -74,10 +75,10 @@ class ModelRunner:
         self.device = device
         self.distributed = distributed
 
-        min_per_gpu_memory = get_available_gpu_memory(
+        avail_memory, total_memory = get_gpu_memory(
             device, gpu_id, distributed=distributed
         )
-        self.max_total_tokens = self.estimate_max_n_tokens(min_per_gpu_memory)
+        self.max_total_tokens = self.estimate_max_n_tokens(avail_memory, total_memory)
         self.max_running_requests = self.max_total_tokens // 2
         self.max_requests = min(
             max(int(self.max_total_tokens / context_len * 512), 2048), 4096
@@ -127,11 +128,7 @@ class ModelRunner:
 
         self.model.load_state_dict(state_dict, assign=assign)
 
-    def estimate_max_n_tokens(self, gpu_memory: int):
-        available_memory = get_available_gpu_memory(
-            self.device, self.gpu_id, distributed=self.distributed
-        )
-
+    def estimate_max_n_tokens(self, available_memory: int, total_memory: int):
         cell_size = (
             self.n_kv_head
             * self.head_dim
@@ -140,7 +137,9 @@ class ModelRunner:
             * torch._utils._element_size(self.kv_cache_dtype)
         )
 
-        rest_memory = available_memory - gpu_memory * (1 - self.memory_fraction_static)
+        rest_memory = available_memory - total_memory * (
+            1 - self.memory_fraction_static
+        )
         max_n_tokens = int(rest_memory * (1 << 30) // cell_size)
 
         return max_n_tokens
