@@ -196,7 +196,7 @@ def unshard_tensor(state_dicts, key, placement):
 
     shard_dim = placement[1]
 
-    return torch.cat([sd[key] for sd in state_dicts], shard_dim)
+    return torch.cat([sd[key] for sd in state_dicts if key in sd], shard_dim)
 
 
 def convert_to_halite(
