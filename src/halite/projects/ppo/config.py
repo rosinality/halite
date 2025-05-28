@@ -14,16 +14,25 @@ class Report(Config):
     log_step: int = 100
 
 
+class Inference(Config):
+    memory_fraction: float = 0.6
+
+
 class PPO(Config):
     actor: Model
     trainer: Instance
     rollout_generator: Instance
     request_builder: Instance
+    inference: Inference | None = None
     ref: Model | None = None
     critic: Model | None = None
     actor_wrapper: Instance | None = None
     infer_dtype: str = "bfloat16"
     report: Report | None = None
+
+    def model_post_init(self, __context):
+        if self.inference is None:
+            self.inference = Inference()
 
 
 class Training(Config):
@@ -31,6 +40,7 @@ class Training(Config):
     eval_batch_size: StrictInt | None = None
 
     ppo_minibatch_size: StrictInt | None = None
+    ppo_microbatch_size: StrictInt | None = None
     ppo_n_epochs: StrictInt = 1
 
     max_iter: StrictInt | None = None
