@@ -98,6 +98,7 @@ class RotaryEmbedding(nn.Module):
         use_complex=False,
         use_rotate_half=False,
         pre_init=False,
+        use_fp32=False,
     ):
         super().__init__()
 
@@ -108,6 +109,7 @@ class RotaryEmbedding(nn.Module):
         self.use_complex = use_complex
         self.use_rotate_half = use_rotate_half
         self.pre_init = pre_init
+        self.use_fp32 = use_fp32
 
         self.init_buffers()
 
@@ -156,10 +158,14 @@ class RotaryEmbedding(nn.Module):
                 *freqs.shape, 2, 2
             )
 
-    def cast_cache(self, device):
+    def cast_cache(self, device, dtype):
         if self.use_rotate_half:
-            self.cos = self.cos.to(device)
-            self.sin = self.sin.to(device)
+            self.cos = self.cos.to(
+                device, dtype=torch.float32 if self.use_fp32 else dtype
+            )
+            self.sin = self.sin.to(
+                device, dtype=torch.float32 if self.use_fp32 else dtype
+            )
 
             return
 
@@ -169,7 +175,7 @@ class RotaryEmbedding(nn.Module):
         if seq_len > self.max_seq_len_cached:
             self.init_cache(seq_len=seq_len, device=device, dtype=dtype)
 
-        self.cast_cache(position_ids.device)
+        self.cast_cache(position_ids.device, dtype)
 
         if self.use_complex:
             freqs_cis = self.freqs_cis[position_ids].unsqueeze(-2)

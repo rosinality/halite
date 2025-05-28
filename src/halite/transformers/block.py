@@ -1,5 +1,10 @@
+from typing import Any
+
+import torch
 from torch import nn
 from torch.distributed.tensor.parallel import SequenceParallel
+
+from halite.transformers.attention import UnpadParams
 
 
 class TransformerEncoderBlock(nn.Module):
@@ -11,14 +16,14 @@ class TransformerEncoderBlock(nn.Module):
 
     def forward(
         self,
-        input,
-        residual=None,
-        attention_mask=None,
-        attention_bias=None,
-        pos_emb=None,
-        cache=None,
-        use_cache=True,
-        unpad_params=None,
+        input: torch.Tensor,
+        residual: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        attention_bias: torch.Tensor | None = None,
+        pos_emb: Any = None,
+        cache: Any = None,
+        use_cache: bool = True,
+        unpad_params: UnpadParams | None = None,
     ):
         out, next_cache = self.self_attention(
             input,

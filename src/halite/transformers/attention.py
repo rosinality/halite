@@ -490,7 +490,12 @@ class Attention(nn.Module):
     ):
         if self.use_flash_attn:
             return self.attention_flash(
-                query, key, value, cache, use_cache, unpad_params=unpad_params
+                query.squeeze(0),
+                key.squeeze(0),
+                value.squeeze(0),
+                cache,
+                use_cache,
+                unpad_params=unpad_params,
             )
 
         if self.avail_torch:
@@ -506,6 +511,25 @@ class Attention(nn.Module):
         return self.attention_native(
             query, key, value, attention_mask, attention_bias, cache, use_cache
         )
+
+    @torch.compiler.disable
+    def attention_flash_varlen(self, query, key, value, unpad_params):
+        out = flash_attn_varlen_func(
+            query,
+            key,
+            value,
+            unpad_params.cu_seqlens_q,
+            unpad_params.cu_seqlens_k,
+            max_seqlen_q=unpad_params.max_length_q,
+            max_seqlen_k=unpad_params.max_length_k,
+            dropout_p=self.attn_drop_p if self.training else 0,
+            causal=self.is_causal,
+            softmax_scale=self.normalize,
+            softcap=self.softcap,
+            **self.attention_kwargs,
+        )
+
+        return out
 
     def attention_flash(
         self,
@@ -525,20 +549,7 @@ class Attention(nn.Module):
             next_cache = (key, value)
 
         if unpad_params is not None:
-            out = flash_attn_varlen_func(
-                query.squeeze(0),
-                key.squeeze(0),
-                value.squeeze(0),
-                unpad_params.cu_seqlens_q,
-                unpad_params.cu_seqlens_k,
-                max_seqlen_q=unpad_params.max_length_q,
-                max_seqlen_k=unpad_params.max_length_k,
-                dropout_p=self.attn_drop_p if self.training else 0,
-                causal=self.is_causal,
-                softmax_scale=self.normalize,
-                softcap=self.softcap,
-                **self.attention_kwargs,
-            )
+            out = self.attention_flash_varlen(query, key, value, unpad_params)
 
         else:
             out = flash_attn_func(

@@ -80,6 +80,8 @@ def qwen3_0_6b_grpo():
 
     conf.ppo = field()
     conf.ppo.actor = load_model("/mnt/naplm/seonghyeon/qwen3/halite/qwen3-0.6b")
+    conf.ppo.actor.model = use_flash_attention(conf.ppo.actor.model)
+    conf.ppo.actor.parallelize.compile_config = {"fullgraph": False}
     conf.ppo.actor_wrapper = partial(UnpaddedModel)
     conf.ppo.trainer = partial(
         PPOTrainer,
