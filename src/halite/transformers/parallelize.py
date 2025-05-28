@@ -19,6 +19,7 @@ def parallelize(
     activation_checkpointing=False,
     activation_checkpointing_config=None,
     compile=False,
+    compile_config=None,
 ):
     if parallel_dims.tp_enabled:
         apply_tp(model, mesh["tp"], tensor_parallel_config)
@@ -27,7 +28,7 @@ def parallelize(
         apply_activation_checkpointing(model, activation_checkpointing_config)
 
     if compile:
-        apply_compile(model)
+        apply_compile(model, compile_config)
 
     if parallel_dims.dp_shard_enabled:
         if parallel_dims.dp_replicate_enabled:
@@ -125,9 +126,14 @@ def apply_tp(model, tp_mesh, config):
         enable_symm_mem_for_group(tp_mesh.get_group().group_name)
 
 
-def apply_compile(model):
+def apply_compile(model, config):
+    config = {} if config is None else config
+
+    if "fullgraph" not in config:
+        config["fullgraph"] = True
+
     for i, block in model.blocks.named_children():
-        block = torch.compile(block, fullgraph=True)
+        block = torch.compile(block, **config)
         model.blocks.register_module(i, block)
 
 

@@ -8,7 +8,11 @@ from halite.projects.common.rollout import (
     RewardRegistry,
 )
 from halite.projects.common.rollout_fn import Compose, ToTokenReward
-from halite.projects.ppo.trainer import PPOTrainer, compute_grpo_advantage
+from halite.projects.ppo.trainer import (
+    build_batch_from_rollouts,
+    PPOTrainer,
+    compute_grpo_advantage,
+)
 from halite.transformers.infer.engine.engine import InferenceResult
 
 
@@ -125,12 +129,24 @@ if __name__ == "__main__":
     trainer = PPOTrainer(
         actor,
         compute_grpo_advantage,
+        log_probs_batch_size=3,
     )
 
-    rollout = trainer.compute_advantage(rollout)
-    pg_loss = trainer.compute_actor_loss(rollout)
+    batch = build_batch_from_rollouts(rollout, offset=-1, pad_id=-1, device=None)
 
-    print(rollout)
-    print(pg_loss.pg_loss, pg_loss.pg_clipfrac)
-    pg_loss.pg_loss.backward()
-    print(actor.logits.grad)
+    for rollout_batch in batch.split(3):
+        print(rollout_batch.input_ids)
+        print(rollout_batch.attention_mask)
+        print(rollout_batch.position_ids)
+        print(rollout_batch.temperatures)
+        print(rollout_batch.response_ids.shape)
+
+    rollout = trainer.compute_advantage(rollout)
+    rollout_batches = rollout.split(2)
+
+    for rollout_batch in rollout_batches:
+        print(rollout_batch.batch.input_ids)
+        print(rollout_batch.batch.attention_mask)
+        print(rollout_batch.batch.position_ids)
+        print(rollout_batch.batch.temperatures)
+        print(rollout_batch.batch.response_ids.shape)

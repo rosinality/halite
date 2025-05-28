@@ -11,6 +11,7 @@ class Report(Config):
     additional_keys: list[str] | None = None
     show_every_nth_sample: int = 10
     show_n_samples: int = 3
+    log_step: int = 100
 
 
 class PPO(Config):

@@ -102,17 +102,27 @@ def train(
         rollout = trainer.compute_advantage(rollout)
         rollout_batches = [rollout]
 
+        if conf.training.ppo_minibatch_size is not None:
+            rollout_batches = rollout.split(conf.training.ppo_minibatch_size)
+
+        n_minibatches = len(rollout_batches)
+
         metrics = []
         for ppo_epoch in range(conf.training.ppo_n_epochs):
             optimizer.zero_grad()
 
-            if conf.training.ppo_minibatch_size is not None:
-                rollout_batches = rollout.split(conf.training.ppo_minibatch_size)
-
             for rollout_batch in rollout_batches:
                 actor_loss = trainer.compute_actor_loss(rollout_batch)
 
-                actor_loss.pg_loss.backward()
+                (actor_loss.pg_loss / n_minibatches).backward()
+
+                with torch.no_grad():
+                    loss_dict = actor_loss.metric_dict()
+                    loss_dict["sample/response_len/mean"] = (
+                        rollout_batch.batch.response_len.float().mean()
+                    )
+
+                    metrics.append(loss_dict)
 
             grad_norm = None
             if conf.training.clip_grad_norm is not None:
@@ -125,17 +135,10 @@ def train(
             scheduler.step()
             optimizer.step()
 
-            loss_dict = actor_loss._asdict()
-            loss_dict["actor/mean_response_len"] = (
-                rollout.batch.response_len.float().mean()
-            )
+        if conf.ppo.report is not None and global_step % conf.ppo.report.log_step == 0:
+            logger.info(build_rollout_report(conf.ppo.report, rollout))
 
-            metrics.append(loss_dict)
-
-        if global_step % conf.output.log_step == 0:
-            if conf.ppo.report is not None:
-                logger.info(build_rollout_report(conf.ppo.report, rollout))
-
+        if global_step % min(conf.output.log_step, conf.output.wandb_log_step) == 0:
             metrics_mean = {}
             for metric in metrics:
                 for k, v in metric.items():
@@ -157,19 +160,23 @@ def train(
 
             loss_txt = "; ".join([f"{k}: {v:.5f}" for k, v in metrics_mean.items()])
 
-            if grad_norm is None:
-                logger.info(
-                    f"epoch {epoch}; {step}/{train_iter}; global {global_step}; {loss_txt}; lr: {lr:.7f}"
-                )
+            if global_step % conf.output.log_step == 0:
+                if grad_norm is None:
+                    logger.info(
+                        f"epoch {epoch}; {step}/{train_iter}; global {global_step}; {loss_txt}; lr: {lr:.7f}"
+                    )
 
-            else:
-                logger.info(
-                    f"epoch {epoch}; {step}/{train_iter}; global {global_step}; {loss_txt}; grad norm: {grad_norm.item():.3f}; lr: {lr:.7f}"
-                )
+                else:
+                    logger.info(
+                        f"epoch {epoch}; {step}/{train_iter}; global {global_step}; {loss_txt}; grad norm: {grad_norm.item():.3f}; lr: {lr:.7f}"
+                    )
 
-            if parallel_dims.is_primary and wandb is not None:
-                report = {"actor/lr": lr}
-                report.update({f"actor/{k}": v for k, v in metrics_mean.items()})
+            if (
+                parallel_dims.is_primary
+                and wandb is not None
+                and global_step % conf.output.wandb_log_step == 0
+            ):
+                report = {"actor/lr": lr, **metrics_mean}
 
                 if grad_norm is not None:
                     report["actor/grad_norm"] = grad_norm
@@ -233,6 +240,7 @@ def main():
         tp=conf.training.tensor_parallel,
         pp=conf.training.pipeline_parallel,
     )
+    pdims.initialize()
     mesh = pdims.build_mesh("cuda")
     logger = get_logger(mesh)
 

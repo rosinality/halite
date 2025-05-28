@@ -71,15 +71,31 @@ class Rollouts(NamedTuple):
         return batches
 
 
+class CriticMetrics(NamedTuple):
+    rewards_mean: torch.Tensor
+    advantage_mean: torch.Tensor
+    advantage_var: torch.Tensor
+    return_mean: torch.Tensor
+    return_var: torch.Tensor
+
+
 class ActorLoss(NamedTuple):
     pg_loss: torch.Tensor
     entropy: torch.Tensor
     approx_kl: torch.Tensor
     pg_clipfrac: torch.Tensor
-    advantage_mean: torch.Tensor
-    advantage_var: torch.Tensor
-    return_mean: torch.Tensor
-    return_var: torch.Tensor
+
+    critic_metrics: CriticMetrics
+
+    def metric_dict(self):
+        return {
+            **{
+                "actor/" + k: v
+                for k, v in self._asdict().items()
+                if k != "critic_metrics"
+            },
+            **{"critic/" + k: v for k, v in self.critic_metrics._asdict().items()},
+        }
 
 
 def build_batch_from_rollouts(rollouts, offset=0, pad_id=-1, device=None):
@@ -398,8 +414,10 @@ class PPOTrainer:
             group_ids=batch.ids,
         )
 
+        rollouts_orig = {**rollouts._asdict(), "rewards": rewards}
+
         return Rollouts(
-            **rollouts._asdict(),
+            **rollouts_orig,
             batch=batch,
             advantages=advantages,
             returns=returns,
@@ -426,6 +444,7 @@ class PPOTrainer:
         log_ratio = actor_out - rollouts.actor_log_probs
 
         ratio = torch.exp(log_ratio)
+
         pg_loss1 = -rollouts.advantages * ratio
         pg_loss2 = -rollouts.advantages * torch.clamp(
             ratio, min=1 - self.clip_low, max=1 + self.clip_high
@@ -462,10 +481,13 @@ class PPOTrainer:
             pg_clipfrac=pg_clipfrac,
             entropy=entropy,
             approx_kl=approx_kl,
-            advantage_mean=advantage_mean,
-            advantage_var=advantage_var,
-            return_mean=return_mean,
-            return_var=return_var,
+            critic_metrics=CriticMetrics(
+                rewards_mean=rollouts.rewards.sum(-1).mean(),
+                advantage_mean=advantage_mean,
+                advantage_var=advantage_var,
+                return_mean=return_mean,
+                return_var=return_var,
+            ),
         )
 
     def compute_critic_loss(self, rollouts):
