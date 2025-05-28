@@ -94,7 +94,7 @@ def entropy_from_logits_kernel(
     tl.store(lse_ptrs, lse)
 
 
-def entropy_from_logits_forward(x, logit_scale=1.0):
+def _entropy_from_logits_forward(x, logit_scale=1.0):
     shape = x.shape
 
     x = x.contiguous()
@@ -126,6 +126,22 @@ def entropy_from_logits_forward(x, logit_scale=1.0):
     lse = lse.reshape(*shape[:-1])
 
     return y, lse
+
+
+@torch.library.custom_op("halite::entropy_from_logits_forward", mutates_args={})
+def _entropy_from_logits_forward_compileable(
+    x: torch.Tensor, logit_scale: float = 1.0
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return _entropy_from_logits_forward(x, logit_scale)
+
+
+def entropy_from_logits_forward(
+    x: torch.Tensor, logit_scale: float = 1.0
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if torch.compiler.is_compiling():
+        return _entropy_from_logits_forward_compileable(x, logit_scale)
+
+    return _entropy_from_logits_forward(x, logit_scale)
 
 
 @triton.jit
@@ -172,7 +188,7 @@ def entropy_from_logits_backward_kernel(
         tl.store(dx_start_ptr + col_offsets, dx_val, mask=mask)
 
 
-def entropy_from_logits_backward(dy, entropy, lse, x, logit_scale=1.0):
+def _entropy_from_logits_backward(dy, entropy, lse, x, logit_scale=1.0):
     shape = x.shape
 
     dy = dy.contiguous()
@@ -211,6 +227,32 @@ def entropy_from_logits_backward(dy, entropy, lse, x, logit_scale=1.0):
     dx = dx.reshape(*shape)
 
     return dx
+
+
+@torch.library.custom_op("halite::entropy_from_logits_backward", mutates_args={})
+def _entropy_from_logits_backward_compileable(
+    dy: torch.Tensor,
+    entropy: torch.Tensor,
+    lse: torch.Tensor,
+    x: torch.Tensor,
+    logit_scale: float = 1.0,
+) -> torch.Tensor:
+    return _entropy_from_logits_backward(dy, entropy, lse, x, logit_scale)
+
+
+def entropy_from_logits_backward(
+    dy: torch.Tensor,
+    entropy: torch.Tensor,
+    lse: torch.Tensor,
+    x: torch.Tensor,
+    logit_scale: float = 1.0,
+) -> torch.Tensor:
+    if torch.compiler.is_compiling():
+        return _entropy_from_logits_backward_compileable(
+            dy, entropy, lse, x, logit_scale
+        )
+
+    return _entropy_from_logits_forward(x, logit_scale)
 
 
 class EntropyFromLogits(torch.autograd.Function):
