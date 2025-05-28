@@ -1,6 +1,6 @@
 from functools import partial
 
-from slickconf import field, external
+from slickconf import call, field, external
 from torch import optim
 
 from halite.data import preprocess
@@ -18,6 +18,7 @@ from halite.projects.ppo.model import UnpaddedModel
 from halite.projects.ppo.trainer import PPOTrainer, compute_grpo_advantage
 
 from ..data.hendrycks_math import conf as data_conf
+from ..models.transformer import use_flash_attention
 from .rewards import MathVerify
 
 
@@ -62,7 +63,7 @@ conf.training = field(
         lr=lr,
         n_iter=max_iter,
         initial_multiplier=1e-6,
-        warmup=500,
+        warmup=100,
         decay=("linear", "cos"),
     ),
     weight_decay=0.1,
@@ -70,7 +71,7 @@ conf.training = field(
     n_epochs=5,
 )
 
-conf.output = field(log_step=10, save_step=100)
+conf.output = field(log_step=10, save_step=100, wandb_log_step=1)
 
 
 def qwen3_0_6b_grpo():
@@ -106,7 +107,7 @@ def qwen3_0_6b_grpo():
     )
     conf.ppo.request_builder = RequestBuilder(
         "prompt_text",
-        sampling_params={"max_new_tokens": 1024, "n": 16, "stop": "</answer>"},
+        sampling_params={"max_new_tokens": 2048, "n": 16, "stop": "</answer>"},
         type="math",
         meta_maps={"input_text": "prompt_text", "solution": "solution"},
     )
@@ -117,5 +118,14 @@ def qwen3_0_6b_grpo():
         additional_keys=["solution"],
         show_every_nth_sample=8,
     )
+    conf.training.ppo_minibatch_size = 4
+
+    return conf
+
+
+def qwen3_8b_grpo():
+    conf = call[qwen3_0_6b_grpo]()
+    conf.ppo.actor = load_model("/mnt/naplm/seonghyeon/qwen3/halite/qwen3-8b")
+    conf.training.ppo_minibatch_size = 4
 
     return conf
