@@ -120,7 +120,6 @@ def _entropy_from_logits_forward(x, logit_scale=1.0):
         BLOCK_SIZE=BLOCK_SIZE,
         num_warps=num_warps,
     )
-    torch.cuda.synchronize()
 
     y = y.reshape(*shape[:-1])
     lse = lse.reshape(*shape[:-1])
@@ -160,7 +159,7 @@ def entropy_from_logits_backward_kernel(
     logit_scale,
     BLOCK_SIZE: tl.constexpr,
 ):
-    row_id = tl.program_id(0)
+    row_id = tl.program_id(0).to(tl.int64)
 
     base_col_offsets = tl.arange(0, BLOCK_SIZE)
 
@@ -252,7 +251,7 @@ def entropy_from_logits_backward(
             dy, entropy, lse, x, logit_scale
         )
 
-    return _entropy_from_logits_forward(x, logit_scale)
+    return _entropy_from_logits_backward(dy, entropy, lse, x, logit_scale)
 
 
 class EntropyFromLogits(torch.autograd.Function):
