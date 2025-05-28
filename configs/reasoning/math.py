@@ -1,6 +1,7 @@
 from functools import partial
 
 from slickconf import call, field, external
+from slickconf import call, field, external
 from torch import optim
 
 from halite.data import preprocess
@@ -16,13 +17,15 @@ from halite.projects.common.rollout_fn import Compose, Detokenize, ToTokenReward
 from halite.projects.common.train_fn import basic_train_step
 from halite.projects.ppo.model import UnpaddedModel
 from halite.projects.ppo.trainer import PPOTrainer, compute_grpo_advantage
+from halite.projects.ppo.variants import PPOAdaptiveEntropyActorLoss
 
 from ..data.hendrycks_math import conf as data_conf
+from ..models.transformer import use_flash_attention
 from ..models.transformer import use_flash_attention
 from .rewards import MathVerify
 
 
-lr = 3e-5
+lr = 1e-6
 max_iter = 1000
 
 
@@ -51,10 +54,11 @@ conf.data = field(
 
 
 conf.training = field(
-    train_batch_size=8,
+    train_batch_size=64,
     eval_batch_size=8,
     max_iter=max_iter,
-    ppo_minibatch_size=16,
+    ppo_minibatch_size=128,
+    ppo_microbatch_size=8,
     ppo_n_epochs=1,
     train_step_fn=partial(basic_train_step),
     optimizer=partial(optim.AdamW, lr=lr, betas=(0.9, 0.95)),
@@ -63,14 +67,16 @@ conf.training = field(
         lr=lr,
         n_iter=max_iter,
         initial_multiplier=1e-6,
-        warmup=100,
+        final_multiplier=1.0,
+        warmup=0,
         decay=("linear", "cos"),
     ),
     weight_decay=0.1,
     clip_grad_norm=1.0,
-    n_epochs=5,
+    n_epochs=30,
 )
 
+conf.output = field(log_step=10, save_step=100, wandb_log_step=1)
 conf.output = field(log_step=10, save_step=100, wandb_log_step=1)
 
 
@@ -87,8 +93,17 @@ def qwen3_0_6b_grpo():
     conf.ppo.trainer = partial(
         PPOTrainer,
         advantage_fn=partial(compute_grpo_advantage, std_normalize=False),
-        pg_loss_agg="token-sum",
-        pg_loss_max_tokens=4096,
+        actor_loss=PPOAdaptiveEntropyActorLoss(
+            clip_low=0.2,
+            clip_high=0.2,
+            pg_loss_agg="token-sum",
+            pg_loss_max_tokens=4096,
+            init_entropy_coef=0.0,
+            min_entropy_coef=0.0,
+            max_entropy_coef=0.005,
+            entropy_coef_update_size=0.0001,
+            target_entropy=0.2,
+        ),
         log_probs_batch_size=16,
     )
     conf.ppo.rollout_generator = partial(
@@ -118,7 +133,6 @@ def qwen3_0_6b_grpo():
         additional_keys=["solution"],
         show_every_nth_sample=8,
     )
-    conf.training.ppo_minibatch_size = 4
 
     return conf
 
@@ -126,6 +140,5 @@ def qwen3_0_6b_grpo():
 def qwen3_8b_grpo():
     conf = call[qwen3_0_6b_grpo]()
     conf.ppo.actor = load_model("/mnt/naplm/seonghyeon/qwen3/halite/qwen3-8b")
-    conf.training.ppo_minibatch_size = 4
 
     return conf
