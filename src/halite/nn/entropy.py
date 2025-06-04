@@ -14,7 +14,7 @@ def get_num_warps(BLOCK_SIZE):
     return num_warps
 
 
-MAX_FUSED_SIZE = 65536
+MAX_FUSED_SIZE = 65536 // 8
 
 
 @triton.jit
