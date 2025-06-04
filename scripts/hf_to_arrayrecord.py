@@ -174,13 +174,13 @@ if __name__ == "__main__":
                     shard_conf.update(dset_conf[split]["shards"][dataset_name])
 
     if len(dataset_conf) == 1:
-        dataset_conf = dataset_conf[next(dataset_conf.keys())]
+        dataset_conf = dataset_conf[next(iter(dataset_conf.keys()))]
         render_fn = get_render_fn(TEMPLATE_NO_SPLITS, filters={"pformat": pformat_dict})
 
     else:
         render_fn = get_render_fn(TEMPLATE_SPLITS, filters={"pformat": pformat_dict})
 
-    dataset_name = dataset_name.replace("/", "_")
+    dataset_name = args.dataset.replace("/", "_")
 
     with open(os.path.join(args.output, dataset_name, "dataset.py"), "w") as f:
         f.write(render_fn(dataset=dataset_conf))
