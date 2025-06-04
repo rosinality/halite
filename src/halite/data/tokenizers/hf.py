@@ -43,3 +43,6 @@ class HFTokenizer:
 
     def decode(self, t: Sequence[int]) -> str:
         return self.tokenizer.decode(t)
+
+    def decode_batch(self, batch: Sequence[Sequence[int]]) -> list[str]:
+        return self.tokenizer._tokenizer.decode_batch(batch, skip_special_tokens=False)

@@ -184,6 +184,9 @@ class Llama3Tokenizer:
         # Typecast is safe here. Tiktoken doesn't do anything list-related with the sequence.
         return self.model.decode(cast(List[int], t))
 
+    def decode_batch(self, batch: Sequence[Sequence[int]]) -> list[str]:
+        return self.model.decode_batch(batch)
+
     @staticmethod
     def _split_whitespaces_or_nonwhitespaces(
         s: str, max_consecutive_slice_len: int
