@@ -378,6 +378,7 @@ def main():
         collate_fn=collate_fn,
         num_workers=4,
         rank=mesh.get_local_rank("dp"),
+        drop_last=True
     )
     eval_loader = DataLoader(
         eval_dset,
@@ -385,6 +386,7 @@ def main():
         collate_fn=collate_fn,
         num_workers=4,
         rank=mesh.get_local_rank("dp"),
+        drop_last=True
     )
 
     optimizer = instantiate(conf.training.optimizer)(
