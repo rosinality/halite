@@ -339,9 +339,7 @@ def main():
     train_source, train_ratios, train_names = build_dataset_from_spec(
         conf.data.train, split="train", split_ratio=conf.data.train_ratio
     )
-    eval_source, eval_ratios, eval_names = build_dataset_from_spec(
-        conf.data.eval, split="eval", split_ratio=conf.data.eval_ratio
-    )
+
     preprocess_ops = []
     if conf.data.preprocess is not None:
         for op in conf.data.preprocess:
@@ -360,17 +358,7 @@ def main():
         operations=preprocess_ops,
     )
 
-    eval_dset = WeightedIterableDataset(
-        eval_source,
-        eval_ratios,
-        eval_names,
-        num_replicas=pdims.dp,
-        rank=mesh.get_local_rank("dp"),
-        operations=preprocess_ops,
-    )
-
     logger.info(f"train_dset\n{train_dset.summary()}")
-    logger.info(f"eval_dset\n{eval_dset.summary()}")
 
     train_loader = DataLoader(
         train_dset,
@@ -378,16 +366,34 @@ def main():
         collate_fn=collate_fn,
         num_workers=4,
         rank=mesh.get_local_rank("dp"),
-        drop_last=True
+        drop_last=True,
     )
-    eval_loader = DataLoader(
-        eval_dset,
-        batch_size=conf.training.eval_batch_size // pdims.dp,
-        collate_fn=collate_fn,
-        num_workers=4,
-        rank=mesh.get_local_rank("dp"),
-        drop_last=True
-    )
+
+    eval_loader = None
+    if conf.data.eval is not None:
+        eval_source, eval_ratios, eval_names = build_dataset_from_spec(
+            conf.data.eval, split="eval", split_ratio=conf.data.eval_ratio
+        )
+
+        eval_dset = WeightedIterableDataset(
+            eval_source,
+            eval_ratios,
+            eval_names,
+            num_replicas=pdims.dp,
+            rank=mesh.get_local_rank("dp"),
+            operations=preprocess_ops,
+        )
+
+        logger.info(f"eval_dset\n{eval_dset.summary()}")
+
+        eval_loader = DataLoader(
+            eval_dset,
+            batch_size=conf.training.eval_batch_size // pdims.dp,
+            collate_fn=collate_fn,
+            num_workers=4,
+            rank=mesh.get_local_rank("dp"),
+            drop_last=True,
+        )
 
     optimizer = instantiate(conf.training.optimizer)(
         group_parameters(actor, weight_decay=conf.training.weight_decay)
