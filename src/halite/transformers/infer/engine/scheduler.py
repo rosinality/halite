@@ -323,6 +323,9 @@ class Scheduler:
         self.kv_pool.free_group_begin()
 
         for i, (req, next_token_id) in enumerate(zip(batch.requests, next_token_ids)):
+            if req.is_retracted:
+                continue
+            
             req.completion_tokens_without_jump_forward += 1
             req.output_ids.append(next_token_id)
             req.check_finished(self.tokenizer)
@@ -360,6 +363,9 @@ class Scheduler:
 
         logprob_pt = 0
         for i, req in enumerate(batch.requests):
+            if req.is_retracted:
+                continue
+            
             req.completion_tokens_without_jump_forward += 1
             req.output_ids.append(next_token_ids[i])
             req.check_finished(self.tokenizer)

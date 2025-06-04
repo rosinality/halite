@@ -243,6 +243,14 @@ class Request:
 
         self.extend_input_len = len(self.all_ids) - len(self.prefix_ids)
 
+    def reset_for_retract(self):
+        self.prefix_ids = []
+        self.last_node = None
+        self.extend_input_len = 0
+        self.is_retracted = True
+
+        self.logprob_start_len = 10**9
+
 
 BATCH_ID = 0
 
@@ -279,6 +287,8 @@ class Batch:
 
         self.id = BATCH_ID
         BATCH_ID += 1
+        
+        self.retract_decode_steps = 20
 
     def alloc_request_slots(self, n_requests: int):
         req_pool_ids = self.request_to_token_pool.alloc(n_requests)
@@ -332,6 +342,7 @@ class Batch:
             )
 
             start += req.extend_input_len
+            req.is_retracted = False
 
         self.input_ids = torch.tensor(sum(input_ids, []), dtype=torch.int32).to(
             self.device, non_blocking=True
@@ -395,8 +406,9 @@ class Batch:
         self.attention_backend = attention_backend
         self.attention_backend.prepare(self)
 
-    def filter(self):
-        keep_ids = [i for i, req in enumerate(self.requests) if not req.finished()]
+    def filter(self, keep_ids=None):
+        if keep_ids is None:
+            keep_ids = [i for i, req in enumerate(self.requests) if not req.finished()]
 
         if len(keep_ids) == 0:
             self.requests = []
@@ -450,3 +462,46 @@ class Batch:
             return True
 
         return False
+    
+    def retract_decode(self):
+        sorted_ids = [i for i in range(len(self.requests))]
+        sorted_ids.sort(key=lambda i: (len(self.requests[i].output_ids), -len(self.requests[i].input_ids),), reverse=True)
+        
+        retracted_reqs = []
+        seq_lens_cpu = self.seq_lens.cpu().numpy()
+        
+        first_iter = True
+        while (self.kv_pool.available_size() < len(sorted_ids) * self.retract_decode_steps or first_iter):
+            if len(sorted_ids) == 1:
+                if self.kv_pool.available_size() <= 0:
+                    raise RuntimeError("No space left for only one request")
+                
+                break
+
+            first_iter = True
+            id = sorted_ids.pop()
+            req = self.requests[id]
+            retracted_reqs.append(req)
+            
+            last_uncached_pos = len(req.prefix_ids)
+            token_ids = self.request_to_token_pool.request_to_token[req.request_pool_id, last_uncached_pos:seq_lens_cpu[id]]
+            self.kv_pool.free(token_ids)
+            self.request_to_token_pool.free(req.request_pool_id)
+            
+            self.tree_cache.decrease_lock_ref(req.last_node)
+            
+            residual_size = len(sorted_ids) * self.retract_decode_steps - self.kv_pool.available_size()
+            residual_size = max(0, residual_size)
+            self.tree_cache.evict(residual_size, self.kv_pool.free)
+            
+            req.reset_for_retract()
+            
+        self.filter(keep_ids=sorted_ids)
+        
+        total_decoded_tokens = sum(len(req.output_ids) for req in self.requests)
+        total_max_new_tokens = sum(req.sampling_params.max_new_tokens for req in self.requests)
+        
+        new_estimate_ratio = (total_decoded_tokens + self.retract_decode_steps * len(self.requests)) / total_max_new_tokens
+        new_estimate_ratio = max(1.0, new_estimate_ratio)
+        
+        return retracted_reqs, new_estimate_ratio
