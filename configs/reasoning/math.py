@@ -21,7 +21,6 @@ from halite.projects.ppo.variants import PPOAdaptiveEntropyActorLoss
 
 from ..data.hendrycks_math import conf as data_conf
 from ..models.transformer import use_flash_attention
-from ..models.transformer import use_flash_attention
 from .rewards import MathVerify
 
 
