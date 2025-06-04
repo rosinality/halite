@@ -199,6 +199,7 @@ def compute_grpo_advantage(
     unique_ids, idx = group_ids.unique(sorted=True, return_inverse=True)
     count = torch.bincount(idx, minlength=unique_ids.numel())
     mean = torch.bincount(idx, weights=rewards) / count
+
     mean[count == 1] = 0
     advantage = rewards - mean[idx]
 

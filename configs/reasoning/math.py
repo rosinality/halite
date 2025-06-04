@@ -1,7 +1,6 @@
 from functools import partial
 
 from slickconf import call, field, external
-from slickconf import call, field, external
 from torch import optim
 
 from halite.data import preprocess
@@ -20,7 +19,7 @@ from halite.projects.ppo.trainer import PPOTrainer, compute_grpo_advantage
 from halite.projects.ppo.variants import PPOAdaptiveEntropyActorLoss
 
 from ..data.hendrycks_math import conf as data_conf
-from ..models.transformer import use_flash_attention
+from ..models.transformer import use_flash_attention, transformer_tokainfer
 from .rewards import MathVerify
 
 
@@ -131,6 +130,15 @@ def qwen3_0_6b_grpo():
         reward_key=reward_key,
         additional_keys=["solution"],
         show_every_nth_sample=8,
+    )
+
+    return conf
+
+
+def qwen3_0_6b_grpo_tokainfer():
+    conf = call[qwen3_0_6b_grpo]()
+    conf.ppo.actor.model_infer = call[transformer_tokainfer](
+        qkv_split=conf.ppo.actor.model_conf.qkv_split, infer="tokainfer"
     )
 
     return conf
