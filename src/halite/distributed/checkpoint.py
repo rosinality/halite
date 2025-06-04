@@ -389,7 +389,12 @@ class CheckpointManager:
 
 
 def load_checkpoint(
-    path: str, model_parts=None, optimizers=None, states=None, verbose: bool = False
+    path: str,
+    model_parts=None,
+    optimizers=None,
+    states=None,
+    process_group=None,
+    verbose: bool = False,
 ):
     if states is None:
         states = {}
@@ -408,7 +413,7 @@ def load_checkpoint(
         logger.info(f"Loading the checkpoint of {path}")
         begin = time.monotonic()
 
-    dcp.load(states, checkpoint_id=path)
+    dcp.load(states, checkpoint_id=path, process_group=process_group)
     states.update(original_stateful_states)
 
     if verbose:
