@@ -490,9 +490,9 @@ class Attention(nn.Module):
     ):
         if self.use_flash_attn:
             return self.attention_flash(
-                query.squeeze(0),
-                key.squeeze(0),
-                value.squeeze(0),
+                query,
+                key,
+                value,
                 cache,
                 use_cache,
                 unpad_params=unpad_params,
@@ -549,7 +549,9 @@ class Attention(nn.Module):
             next_cache = (key, value)
 
         if unpad_params is not None:
-            out = self.attention_flash_varlen(query, key, value, unpad_params)
+            out = self.attention_flash_varlen(
+                query.squeeze(0), key.squeeze(0), value.squeeze(0), unpad_params
+            )
 
         else:
             out = flash_attn_func(
