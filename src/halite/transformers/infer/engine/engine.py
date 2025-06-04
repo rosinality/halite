@@ -4,33 +4,10 @@ import uuid
 
 from torch import nn
 
+
 from halite.transformers.infer.engine.model_runner import ModelConfig, ModelRunner
 from halite.transformers.infer.engine.scheduler import Scheduler, ServerConfig
-
-
-class InferenceResult:
-    def __init__(self, id: int, input_ids: list[int], output_ids: list[list[int]]):
-        self.id = id
-        self.input_ids = input_ids
-        self.output_ids = output_ids
-
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "input_ids": self.input_ids,
-            "output_ids": self.output_ids,
-        }
-
-    def __repr__(self):
-        if len(self.output_ids) > 2:
-            output_ids = [self.output_ids[0], "...", self.output_ids[-1]]
-
-        else:
-            output_ids = self.output_ids
-
-        output_ids = ", ".join(str(out) for out in output_ids)
-
-        return f"InferenceResult(id={self.id}, input_ids={self.input_ids}, output_ids=[{output_ids}])"
+from halite.transformers.infer.types import InferenceResult
 
 
 class InferenceEngine:
