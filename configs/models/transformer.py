@@ -20,12 +20,24 @@ from halite.transformers.position import RotaryEmbedding, apply_rotary_emb
 from halite.transformers.transformer import TransformerDecoder
 from halite.transformers.infer.transformer import InferTransformerDecoder
 from halite.transformers.infer.block import InferTransformerEncoderBlock
+from halite.transformers.tokainfer.block import TokaInferTransformerEncoderBlock
+from halite.transformers.tokainfer.transformer import TokaInferTransformerDecoder
 
 try:
     from halite.transformers.infer.attention import (
         InferSelfAttention,
         InferSelfAttentionQKV,
         FlashInferAttention,
+    )
+
+except ImportError:
+    pass
+
+try:
+    from halite.transformers.tokainfer.attention import (
+        TokaInferSelfAttention,
+        TokaInferSelfAttentionQKV,
+        TokaInferAttention,
     )
 
 except ImportError:
@@ -406,6 +418,125 @@ def transformer_infer(
         .instance(TransformerDecoder)
         .map_instance(
             InferTransformerDecoder,
+            embedding="$embedding",
+            pos_embed="$pos_embed",
+            blocks="$blocks",
+            post_blocks="$post_blocks",
+            head="$head",
+            tie_embeds="$tie_embeds",
+            use_position_ids="$use_position_ids",
+            attention_processor="$attention_processor",
+        )
+        .chain(),
+    ]
+
+    return partial(patch, patches=patches)
+
+
+@config_fn
+def transformer_tokainfer(
+    vocab_size=None,
+    dim=None,
+    n_heads=None,
+    head_dim=None,
+    n_layers=None,
+    intermediate_size=None,
+    context_len=None,
+    n_key_value_heads=None,
+    pos_embed="rope",
+    pos_embed_apply_fn=None,
+    softcap=0.0,
+    is_causal=True,
+    norm=None,
+    rms_norm_epsilon=1e-6,
+    post_norm=False,
+    attention_processor="auto",
+    attention_bias=False,
+    flex_attention_processor=None,
+    qkv_split=False,
+    gated_ff_split=False,
+    ffn_bias=False,
+    ffn_activation="swiglu",
+    infer: str | None = None,
+    embedding=None,
+    q_norm=None,
+    k_norm=None,
+    use_head=True,
+    tie_embeds=False,
+    layer_types=None,
+):
+    if infer is None:
+        return partial(patch, patches=())
+
+    patches = [
+        patch_fn.select()
+        .instance(Attention)
+        .map_instance(
+            TokaInferAttention,
+            layer_id=0,
+            n_heads="$n_heads",
+            head_dim="$head_dim",
+            n_key_value_heads="$n_key_value_heads",
+            apply_pos_emb_fn="$apply_pos_emb_fn",
+            q_norm="$q_norm",
+            k_norm="$k_norm",
+        )
+        .chain(),
+        patch_fn.select()
+        .instance(TokaInferAttention)
+        .at("layer_id")
+        .set_sequence("$index")
+        .chain(),
+    ]
+
+    if qkv_split:
+        patches += [
+            patch_fn.select()
+            .instance(SelfAttentionQKV)
+            .map_instance(
+                TokaInferSelfAttentionQKV,
+                q="$q",
+                k="$k",
+                v="$v",
+                attention="$attention",
+                out="$out",
+                q_init="$q_init",
+                k_init="$k_init",
+                v_init="$v_init",
+                out_init="$out_init",
+                scaler="$scaler",
+            )
+            .chain()
+        ]
+
+    else:
+        patches += [
+            patch_fn.select()
+            .instance(SelfAttention)
+            .map_instance(
+                TokaInferSelfAttention,
+                qkv="$qkv",
+                attention="$attention",
+                out="$out",
+                qkv_split="llama",
+                qkv_init="$qkv_init",
+                out_init="$out_init",
+                scaler="$scaler",
+            )
+            .chain()
+        ]
+
+    patches += [
+        patch_fn.select()
+        .instance(TransformerEncoderBlock)
+        .map_instance(
+            TokaInferTransformerEncoderBlock, self_attention="$self_attention", ff="$ff"
+        )
+        .chain(),
+        patch_fn.select()
+        .instance(TransformerDecoder)
+        .map_instance(
+            TokaInferTransformerDecoder,
             embedding="$embedding",
             pos_embed="$pos_embed",
             blocks="$blocks",

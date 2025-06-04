@@ -7,7 +7,7 @@ from halite.nn.normalization import RMSNorm
 from halite.transformers.position import RotaryEmbedding, apply_rotary_emb
 from halite.transformers.parallelize import parallelize
 
-from ..transformer import transformer, transformer_infer
+from ..transformer import transformer, transformer_infer, transformer_tokainfer
 from .checkpoint import weight_maps, to_halite_postprocess
 
 conf = field()
@@ -42,7 +42,7 @@ transformer_config = field(
 )
 
 conf.model = call[transformer](**transformer_config)
-conf.model_infer = call[transformer_infer](**transformer_config, infer="flashinfer")
+conf.model_infer = call[transformer_tokainfer](**transformer_config, infer="flashinfer")
 conf.model_conf = field(
     **transformer_config, use_complex_rope=use_complex_rope, dtype="bfloat16"
 )
