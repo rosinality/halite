@@ -73,6 +73,19 @@ class ApplyTemplate:
             record[self.key] = self.template(record)
 
             yield record
+            
+            
+class ApplyFormat:
+    def __init__(self, key, format):
+        self.key = key
+
+        self.format = format
+
+    def __call__(self, iterator):
+        for record in iterator:
+            record[self.key] = self.format.format(**record)
+
+            yield record
 
 
 class Tokenize:
