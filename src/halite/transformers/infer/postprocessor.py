@@ -17,6 +17,26 @@ class LogitsProcessorOutput:
     input_top_logprobs: list = None
     output_top_logprobs: list = None
 
+    def slice(self, batch_size):
+        return LogitsProcessorOutput(
+            self.next_token_logits[:batch_size],
+            self.next_token_logprobs[:batch_size]
+            if self.next_token_logprobs is not None
+            else None,
+            self.normalized_prompt_logprobs[:batch_size]
+            if self.normalized_prompt_logprobs is not None
+            else None,
+            self.input_token_logprobs[:batch_size]
+            if self.input_token_logprobs is not None
+            else None,
+            self.input_top_logprobs[:batch_size]
+            if self.input_top_logprobs is not None
+            else None,
+            self.output_top_logprobs[:batch_size]
+            if self.output_top_logprobs is not None
+            else None,
+        )
+
 
 class LogitsProcessor(nn.Module):
     def __init__(self):
