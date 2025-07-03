@@ -1,6 +1,7 @@
 import torch
 
 from halite.transformers.transformer import TransformerDecoder
+from halite.transformers.infer.attention import FlashInferAttention
 from halite.transformers.infer.postprocessor import LogitsProcessor
 
 
@@ -35,25 +36,33 @@ class InferTransformerDecoder(TransformerDecoder):
 
         self.logits_processor = LogitsProcessor()
 
+        self.attention_backend_modules = None
+        self.kv_pool_modules = None
+
+    def set_attention_backend(self, attention_backend):
+        if self.attention_backend_modules is None:
+            self.attention_backend_modules = []
+
+            for module in self.modules():
+                if isinstance(module, FlashInferAttention):
+                    self.attention_backend_modules.append(module)
+
+        for module in self.attention_backend_modules:
+            module.attention_backend = attention_backend
+
+    def set_kv_pool(self, kv_pool):
+        if self.kv_pool_modules is None:
+            self.kv_pool_modules = []
+
+            for module in self.modules():
+                if isinstance(module, FlashInferAttention):
+                    self.kv_pool_modules.append(module)
+
+        for module in self.kv_pool_modules:
+            module.kv_pool = kv_pool
+
     @torch.no_grad()
-    def forward(self, batch):
-        out = self.embedding(input_ids=batch.input_ids)
-
-        if self.post_embed is not None:
-            out = self.post_embed(out)
-
-        attention_mask = None
-
-        if self.pos_embed_layer_shared:
-            pos_emb = self.get_pos_embed(
-                self.pos_embed,
-                attention_mask,
-                batch.seq_lens.max(),
-                batch.positions,
-                out.device,
-                out.dtype,
-            )
-
+    def forward_blocks(self, out, batch, attention_mask, pos_emb):
         residual = None
 
         for index, block in self.blocks.items():
@@ -67,6 +76,31 @@ class InferTransformerDecoder(TransformerDecoder):
                 batch,
                 pos_emb=pos_emb,
             )
+
+        return out, residual
+
+    @torch.no_grad()
+    def forward(self, batch):
+        out = self.embedding(input_ids=batch.input_ids)
+
+        if self.post_embed is not None:
+            out = self.post_embed(out)
+
+        attention_mask = None
+
+        if self.pos_embed_layer_shared:
+            pos_emb = self.get_pos_embed(
+                self.pos_embed,
+                attention_mask,
+                batch.seq_lens_max,
+                batch.positions,
+                out.device,
+                out.dtype,
+            )
+
+        residual = None
+
+        out, residual = self.forward_blocks(out, batch, attention_mask, pos_emb)
 
         if self.post_blocks is not None:
             if residual is not None:

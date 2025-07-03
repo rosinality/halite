@@ -5,9 +5,9 @@ import uuid
 from torch import nn
 
 
-from halite.transformers.infer.engine.model_runner import ModelConfig, ModelRunner
-from halite.transformers.infer.engine.scheduler import Scheduler, ServerConfig
-from halite.transformers.infer.types import InferenceResult
+from halite.transformers.infer.engine.model_runner import ModelRunner
+from halite.transformers.infer.engine.scheduler import Scheduler
+from halite.transformers.infer.types import InferenceResult, ModelConfig, ServerConfig
 
 
 class InferenceEngine:
@@ -18,11 +18,10 @@ class InferenceEngine:
         model_config: ModelConfig,
         server_config: ServerConfig | None = None,
     ):
-        self.model_runner = ModelRunner(model, model_config)
-
         if server_config is None:
             server_config = ServerConfig()
 
+        self.model_runner = ModelRunner(model, model_config, server_config)
         self.scheduler = Scheduler(self.model_runner, tokenizer, server_config)
 
         self.model_config = model_config

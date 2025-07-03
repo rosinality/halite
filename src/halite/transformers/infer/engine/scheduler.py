@@ -12,16 +12,7 @@ from halite.transformers.infer.engine.schedule_policy import (
     AddRequestResult,
 )
 from halite.transformers.infer.engine.radix_cache import RadixCache
-
-
-class ServerConfig:
-    max_prefill_tokens: int = 16384
-    chunked_prefill_size: int = 8192
-
-    default_init_new_token_ratio: float = 0.7
-    default_min_new_token_ratio_factor: float = 0.14
-    default_new_token_ratio_decay_steps: int = 600
-    schedule_conservativeness: float = 1.0
+from halite.transformers.infer.types import ServerConfig
 
 
 class Scheduler:
@@ -325,7 +316,7 @@ class Scheduler:
         for i, (req, next_token_id) in enumerate(zip(batch.requests, next_token_ids)):
             if req.is_retracted:
                 continue
-            
+
             req.completion_tokens_without_jump_forward += 1
             req.output_ids.append(next_token_id)
             req.check_finished(self.tokenizer)
@@ -365,7 +356,7 @@ class Scheduler:
         for i, req in enumerate(batch.requests):
             if req.is_retracted:
                 continue
-            
+
             req.completion_tokens_without_jump_forward += 1
             req.output_ids.append(next_token_ids[i])
             req.check_finished(self.tokenizer)

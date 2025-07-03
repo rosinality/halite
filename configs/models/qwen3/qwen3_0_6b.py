@@ -42,7 +42,7 @@ transformer_config = field(
 )
 
 conf.model = call[transformer](**transformer_config)
-conf.model_infer = call[transformer_tokainfer](**transformer_config, infer="flashinfer")
+conf.model_infer = call[transformer_infer](**transformer_config, infer="flashinfer")
 conf.model_conf = field(
     **transformer_config, use_complex_rope=use_complex_rope, dtype="bfloat16"
 )
