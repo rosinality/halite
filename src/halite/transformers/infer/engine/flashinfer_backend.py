@@ -119,17 +119,23 @@ class FlashInferBackend:
         self.kv_last_page_len = torch.ones(
             self.max_batch_size, dtype=torch.int32, device=self.device
         )
+        self.workspace_buffer = torch.empty(
+            self.workspace_size, dtype=torch.uint8, device=self.device
+        )
 
         self.prefill = BatchPrefillWithPagedKVCacheWrapper(
-            torch.empty(self.workspace_size, dtype=torch.uint8, device=self.device),
+            self.workspace_buffer,
             "NHD",
         )
 
         self.decode = BatchDecodeWithPagedKVCacheWrapper(
-            torch.empty(self.workspace_size, dtype=torch.uint8, device=self.device),
+            self.workspace_buffer,
             "NHD",
             use_tensor_cores=self.use_tensor_cores,
         )
+        self._current_decode = self.decode
+
+        self.cuda_graph_wrappers = {}
 
         self.initialized = True
 
@@ -139,11 +145,39 @@ class FlashInferBackend:
         del self.kv_last_page_len
         del self.prefill
         del self.decode
+        del self._current_decode
 
         self.initialized = False
 
-    def get_wrapper(self):
-        return self.prefill, self.decode
+    def initialize_cudagraph_buffers(self, max_batch_size: int):
+        self.cuda_graph_kv_indices = torch.zeros(
+            (max_batch_size * self.max_context_len,),
+            dtype=torch.int32,
+            device=self.device,
+        )
+        self.cuda_graph_wrappers = {}
+
+    def initialize_cudagraph(
+        self,
+        batch_size: int,
+    ):
+        if batch_size in self.cuda_graph_wrappers:
+            return
+
+        decode_wrapper = BatchDecodeWithPagedKVCacheWrapper(
+            self.workspace_buffer,
+            "NHD",
+            use_cuda_graph=True,
+            use_tensor_cores=self.use_tensor_cores,
+            paged_kv_indptr_buffer=self.kv_indptr[: batch_size + 1],
+            paged_kv_indices_buffer=self.cuda_graph_kv_indices,
+            paged_kv_last_page_len_buffer=self.kv_last_page_len[:batch_size],
+        )
+
+        self.cuda_graph_wrappers[batch_size] = decode_wrapper
+
+    def get_wrappers(self):
+        return self.prefill, self._current_decode
 
     def prepare(self, batch):
         if batch.mode == ForwardMode.DECODE:
@@ -157,7 +191,7 @@ class FlashInferBackend:
             )
 
     def prefill_update(self, request_to_pool_id, seq_lens, extend_prefix_lens):
-        prefill, _ = self.get_wrapper()
+        prefill, _ = self.get_wrappers()
 
         batch = len(request_to_pool_id)
 
@@ -195,7 +229,7 @@ class FlashInferBackend:
         )
 
     def decode_update(self, request_to_pool_id, seq_lens, seq_lens_sum):
-        _, decode = self.get_wrapper()
+        _, decode = self.get_wrappers()
 
         batch = len(request_to_pool_id)
 
@@ -224,6 +258,21 @@ class FlashInferBackend:
             page_size=1,
             q_data_type=self.dtype,
             data_type=self.dtype,
+        )
+
+    def decode_update_for_cudagraph(
+        self,
+        batch_size: int,
+        req_pool_indices: torch.Tensor,
+        seq_lens: torch.Tensor,
+        seq_lens_sum: int,
+    ):
+        self._current_decode = self.cuda_graph_wrappers[batch_size]
+
+        self.decode_update(
+            req_pool_indices,
+            seq_lens,
+            seq_lens_sum,
         )
 
 
