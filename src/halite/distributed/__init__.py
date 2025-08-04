@@ -27,6 +27,10 @@ def all_reduce_flag(flag, group, device):
     return flag
 
 
+def find_local_ip():
+    return socket.gethostbyname(socket.getfqdn())
+
+
 def find_free_port():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("", 0))  # Bind to a free port provided by the host.
