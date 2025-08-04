@@ -113,7 +113,7 @@ class RotaryEmbedding(nn.Module):
 
         self.init_buffers()
 
-    def init_buffers(self):
+    def init_buffers(self, device=None):
         inv_freq = self.get_inv_freq()
         self.inv_freq = inv_freq
 
