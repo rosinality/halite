@@ -11,18 +11,39 @@ def get_answer(predict_str: str) -> str:
 
 
 class MathVerify:
-    def __init__(self, timeout_score=0):
+    def __init__(self, timeout_score=0, multiprocess_mode=False, timeout_seconds=5):
         self.timeout_score = timeout_score
+
+        from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig
+
+        if multiprocess_mode:
+            from halite.projects.rewards.math_verify import math_metric, timeout
+
+            verify_fn = math_metric(
+                gold_extraction_target=(LatexExtractionConfig(),),
+                pred_extraction_target=(
+                    ExprExtractionConfig(),
+                    LatexExtractionConfig(),
+                ),
+            )
+
+            self.verify_fn = timeout(timeout_seconds)(verify_fn)
+
+        else:
+            from math_verify.metric import math_metric
+
+            verify_fn = math_metric(
+                gold_extraction_target=(LatexExtractionConfig(),),
+                pred_extraction_target=(
+                    ExprExtractionConfig(),
+                    LatexExtractionConfig(),
+                ),
+            )
+
+            self.verify_fn = verify_fn
 
     def verify(self, model_output, ground_truth):
         from math_verify.errors import TimeoutException
-        from math_verify.metric import math_metric
-        from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig
-
-        verify_fn = math_metric(
-            gold_extraction_target=(LatexExtractionConfig(),),
-            pred_extraction_target=(ExprExtractionConfig(), LatexExtractionConfig()),
-        )
 
         score = 0.0
 
@@ -34,9 +55,11 @@ class MathVerify:
         model_output = f"\\boxed{{{model_output}}}"
 
         try:
-            score, _ = verify_fn([ground_truth], [model_output])
+            score, _ = self.verify_fn([ground_truth], [model_output])
 
-        except Exception:
+        except Exception as e:
+            print(e)
+
             pass
 
         except TimeoutException:
