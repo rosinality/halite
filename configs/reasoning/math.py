@@ -84,7 +84,7 @@ def qwen3_0_6b_grpo():
     reward_key = "correctness"
 
     conf.ppo = field()
-    conf.ppo.actor = load_model("/mnt/naplm/seonghyeon/qwen3/halite/qwen3-0.6b")
+    conf.ppo.actor = load_model("/mnt/naplm/users/seonghyeon/qwen3/halite/qwen3-0.6b")
     conf.ppo.actor.model = use_flash_attention(conf.ppo.actor.model)
     conf.ppo.actor.parallelize.compile_config = {"fullgraph": False}
     conf.ppo.actor_wrapper = partial(UnpaddedModel)
@@ -130,6 +130,18 @@ def qwen3_0_6b_grpo():
         reward_key=reward_key,
         additional_keys=["solution"],
         show_every_nth_sample=8,
+    )
+
+    return conf
+
+
+def qwen3_0_6b_grpo_monarch():
+    conf = call[qwen3_0_6b_grpo]()
+    conf.monarch = field()
+    conf.training.ppo_microbatch_size = conf.training.ppo_microbatch_size // 2
+
+    conf.ppo.rollout_generator.reward_registry[0].fn = external[MathVerify](
+        multiprocess_mode=True
     )
 
     return conf
