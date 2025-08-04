@@ -35,10 +35,12 @@ class FusedLinearCrossEntropy(nn.Module):
     def forward(self, input, target):
         use_z_loss = self.z_loss > 0
 
+        target_shape = target.shape
+
         input = input.view(-1, input.shape[-1])
         target = target.view(-1)
 
-        loss, z_loss = fused_linear_cross_entropy(
+        losses, z_losses = fused_linear_cross_entropy(
             input,
             self.linear.weight,
             target,
@@ -46,14 +48,23 @@ class FusedLinearCrossEntropy(nn.Module):
             ignore_index=self.ignore_index,
             lse_square_scale=self.z_loss,
             return_z_loss=use_z_loss,
+            reduction="none",
         )
+
+        loss = losses.mean()
 
         loss_dict = {"cross entropy": loss.detach()}
 
         if use_z_loss:
-            z_loss = z_loss.detach().mean()
+            z_loss = z_losses.detach().mean()
             loss_dict["z-loss"] = z_loss
-            loss_dict["cross entropy"] -= z_loss
+
+            cross_entropy = losses.detach() - z_losses.detach()
+            loss_dict["cross entropy"] = cross_entropy.mean()
+            # loss_dict["loss_vals"] = cross_entropy.reshape(target_shape)
+
+        # else:
+        # loss_dict["loss_vals"] = loss.detach().reshape(target_shape)
 
         return loss, loss_dict
 
