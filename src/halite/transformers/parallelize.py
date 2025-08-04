@@ -20,6 +20,7 @@ def parallelize(
     activation_checkpointing_config=None,
     compile=False,
     compile_config=None,
+    force_fsdp=False,
 ):
     if parallel_dims.tp_enabled:
         apply_tp(model, mesh["tp"], tensor_parallel_config)
@@ -30,9 +31,15 @@ def parallelize(
     if compile:
         apply_compile(model, compile_config)
 
-    if parallel_dims.dp_shard_enabled:
+    if parallel_dims.dp_shard_enabled or (
+        parallel_dims.dp_replicate_enabled and force_fsdp
+    ):
         if parallel_dims.dp_replicate_enabled:
-            dp_mesh = mesh["dp_replicate", "dp_shard"]
+            if parallel_dims.dp_shard_enabled:
+                dp_mesh = mesh["dp_replicate", "dp_shard"]
+
+            else:
+                dp_mesh = mesh["dp"]
 
         else:
             dp_mesh = mesh["dp"]
