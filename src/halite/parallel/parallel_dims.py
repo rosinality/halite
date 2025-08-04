@@ -5,7 +5,12 @@ from torch import distributed as dist
 
 
 class ParallelDims:
-    def __init__(self, dp_replicate, dp_shard, tp, pp, world_size=None):
+    def __init__(
+        self, dp_replicate, dp_shard, tp, pp, local_rank=None, world_size=None
+    ):
+        if local_rank is None:
+            local_rank = int(os.getenv("LOCAL_RANK", "0"))
+
         if world_size is None:
             world_size = int(os.getenv("WORLD_SIZE", "1"))
 
@@ -25,6 +30,7 @@ class ParallelDims:
         self.tp = tp
         self.pp = pp
 
+        self.local_rank = local_rank
         self.world_size = world_size
 
     @property
@@ -32,15 +38,13 @@ class ParallelDims:
         return dist.get_rank() == 0
 
     def initialize(self):
-        local_rank = int(os.getenv("LOCAL_RANK", "0"))
-
         backend = "gloo"
         device_id = None
 
         if torch.cuda.is_available():
-            torch.cuda.set_device(torch.cuda.device(local_rank))
+            torch.cuda.set_device(torch.cuda.device(self.local_rank))
             backend = "cpu:gloo,cuda:nccl"
-            device_id = torch.device(f"cuda:{local_rank}")
+            device_id = torch.device(f"cuda:{self.local_rank}")
 
         dist.init_process_group(backend, device_id=device_id)
 
