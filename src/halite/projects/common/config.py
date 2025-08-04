@@ -254,6 +254,9 @@ class Output(Config):
     # separately sets wandb logging frequency
     wandb_log_step: StrictInt | None = None
 
+    project: StrictStr | None = None
+    name: StrictStr | Instance | None = None
+
     def model_post_init(self, __context):
         if self.wandb_log_step is None:
             self.wandb_log_step = self.log_step
