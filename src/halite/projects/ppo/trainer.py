@@ -3,15 +3,23 @@ from typing import Any, NamedTuple
 import torch
 from torch.nn import functional as F
 
+from halite.projects.common.rollout import Rollout
 from halite.projects.ppo import math_fn
-from halite.projects.ppo.types import ActorLossResults, Batch, Rollouts
+from halite.projects.ppo.types import ActorLossResults, Batch, RolloutBatch
 from halite.transformers.transformer import TransformerDecoderOutput
 
 
-def build_batch_from_rollouts(rollouts, offset=0, pad_id=-1, device=None):
-    ids = [sample["id"] for sample in rollouts.samples]
-    prompts = [sample["input_ids"] for sample in rollouts.samples]
-    responses = [sample["output_ids"] for sample in rollouts.samples]
+def build_batch_from_rollouts(
+    rollouts: list[Rollout], offset=0, pad_id=-1, device=None
+):
+    ids_map = {}
+    for rollout in rollouts:
+        ids_map[rollout.id] = len(ids_map)
+
+    ids = [ids_map[rollout.id] for rollout in rollouts]
+    prompts = [rollout.input_ids for rollout in rollouts]
+    responses = [rollout.output_ids for rollout in rollouts]
+    reward_seqs = [rollout.rewards for rollout in rollouts]
     prompt_len = torch.tensor([len(p) for p in prompts], device=device)
     response_len = torch.tensor([len(r) for r in responses], device=device)
 
@@ -24,6 +32,13 @@ def build_batch_from_rollouts(rollouts, offset=0, pad_id=-1, device=None):
         dtype=torch.int64,
         device=device,
     )
+
+    rewards = reward_seqs[0].new_zeros(
+        len(reward_seqs), max(r.shape[-1] for r in reward_seqs), device=device
+    )
+
+    for i, reward_seq in enumerate(reward_seqs):
+        rewards[i, : reward_seq.shape[-1]] = reward_seq
 
     attention_mask = torch.zeros_like(input_ids)
     position_ids = torch.zeros_like(input_ids)
@@ -55,7 +70,7 @@ def build_batch_from_rollouts(rollouts, offset=0, pad_id=-1, device=None):
         response_ids[id, :sample_response_len] = response_tensor
 
     temperatures = [
-        params.get("temperature", 1.0) for params in rollouts.sampling_params
+        rollout.sampling_params.get("temperature", 1.0) for rollout in rollouts
     ]
     if all(t == temperatures[0] for t in temperatures):
         temperatures = temperatures[0]
@@ -71,6 +86,7 @@ def build_batch_from_rollouts(rollouts, offset=0, pad_id=-1, device=None):
         response_ids,
         attention_mask,
         position_ids,
+        rewards,
         torch.tensor(ids, device=device),
         prompt_len,
         response_len,
@@ -241,7 +257,7 @@ class PPOTrainer:
         self.pad_id = -1
 
     @torch.no_grad()
-    def compute_advantage(self, rollouts):
+    def compute_advantage(self, rollouts: list[Rollout]):
         batch = build_batch_from_rollouts(
             rollouts, offset=-1, pad_id=self.pad_id, device=self.device
         )
@@ -279,7 +295,8 @@ class PPOTrainer:
         if len(critic_outputs) > 0:
             critic_out = torch.cat(critic_outputs, 0)
 
-        rewards = torch.as_tensor(rollouts.rewards, device=self.device)
+        rewards = batch.rewards
+
         if self.penalty_fn is not None:
             rewards = self.penalty_fn(rewards, actor_out, ref_out)
 
@@ -293,10 +310,9 @@ class PPOTrainer:
             group_ids=batch.ids,
         )
 
-        rollouts_orig = {**rollouts._asdict(), "rewards": rewards}
-
-        return Rollouts(
-            **rollouts_orig,
+        return RolloutBatch(
+            rollouts=rollouts,
+            rewards=rewards,
             batch=batch,
             advantages=advantages,
             returns=returns,
@@ -317,7 +333,7 @@ class PPOTrainer:
 
         return actor_out, actor_entropy, ref_out, critic_out
 
-    def compute_actor_loss(self, rollouts: Rollouts) -> ActorLossResults:
+    def compute_actor_loss(self, rollouts: RolloutBatch) -> ActorLossResults:
         return self.actor_loss.compute_actor_loss(self.actor, rollouts)
 
     def compute_critic_loss(self, rollouts):

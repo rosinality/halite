@@ -38,24 +38,24 @@ def detach(input):
     return input
 
 
-def build_rollout_report(conf, rollout):
+def build_rollout_report(conf, rollouts):
     report_texts = []
 
     n_samples = 0
-    for i, (sample, reward) in enumerate(
-        zip(rollout.samples, rollout.rewards_dict[conf.reward_key].to("cpu").unbind())
-    ):
+    for i, rollout in enumerate(rollouts.rollouts):
+        reward = rollout.rewards_dict[conf.reward_key].to("cpu")
+
         if i % conf.show_every_nth_sample != 0:
             continue
 
-        input_text = sample[conf.input_key]
-        output_text = sample[conf.output_key]
+        input_text = rollout.get_field(conf.input_key)
+        output_text = rollout.get_field(conf.output_key)
 
         report_text = f"# {i}\n[input]\n{input_text}\n\n[output]\n{output_text}\n\n[reward]\n{reward}"
 
         if conf.additional_keys is not None:
             for key in conf.additional_keys:
-                report_text += f"\n\n[{key}]\n{sample[key]}"
+                report_text += f"\n\n[{key}]\n{rollout.get_field(key)}"
 
         report_texts.append(report_text)
 
