@@ -33,7 +33,9 @@ class CrossEntropyLoss(nn.Module):
         else:
             loss = losses.mean()
 
-        loss_dict = {"cross entropy": loss.detach()}
+        loss_dict = {
+            "cross entropy": loss.detach(),
+        }
 
         if self.z_loss > 0:
             if self.micro_average:
@@ -44,15 +46,18 @@ class CrossEntropyLoss(nn.Module):
 
             loss_dict["z-loss"] = z_loss.detach()
 
+            cross_entropy = losses.detach() - z_losses.detach()
+
             if self.micro_average:
-                loss_dict["cross entropy"] = (
-                    losses.detach() - z_losses.detach()
-                ).sum() / n_targets
+                loss_dict["cross entropy"] = cross_entropy.sum() / n_targets
 
             else:
-                loss_dict["cross entropy"] = (
-                    losses.detach() - z_losses.detach()
-                ).mean()
+                loss_dict["cross entropy"] = cross_entropy.mean()
+
+            # loss_dict["loss_vals"] = cross_entropy.reshape(target.shape)
+
+        # else:
+        # loss_dict["loss_vals"] = losses.detach().reshape(target.shape)
 
         if self.micro_average:
             loss_dict["n_targets"] = n_targets
@@ -66,19 +71,24 @@ class CrossEntropyLoss(nn.Module):
         shift_input = input.contiguous().to(torch.float32)
         shift_target = target.contiguous().to(input.device)
 
-        cross_entropy = F.cross_entropy(
+        losses = F.cross_entropy(
             shift_input.view(-1, input.shape[-1]),
             shift_target.view(-1),
             ignore_index=self.ignore_index,
-            reduction="sum" if self.micro_average else "mean",
+            reduction="none",
         )
 
         if self.micro_average:
             n_targets = (target != self.ignore_index).sum().clamp(min=1)
-            cross_entropy = cross_entropy / n_targets
+            loss = losses.sum() / n_targets
 
-        loss = cross_entropy
-        loss_dict = {"cross entropy": cross_entropy.detach()}
+        else:
+            loss = losses.mean()
+
+        loss_dict = {
+            "cross entropy": loss.detach(),
+            # "loss_vals": losses.detach().reshape(target.shape),
+        }
 
         if self.z_loss > 0:
             if self.micro_average:
