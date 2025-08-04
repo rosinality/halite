@@ -66,8 +66,14 @@ class Training(Config):
     calc_loss_in_model: StrictBool = False
 
 
+class Monarch(Config):
+    generator_mesh_size: StrictInt = 1
+    trainer_mesh_size: StrictInt = 1
+
+
 class PPOConfig(MainConfig):
     ppo: PPO
     data: Data
     training: Training
+    monarch: Monarch
     output: Output
