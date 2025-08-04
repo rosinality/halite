@@ -17,26 +17,41 @@ def _all_reduce(tensor, reduce_op, group):
 
 
 class DataManager:
-    def __init__(self, loader, mesh, check_finished=True):
-        self.loader = loader
-        self.pg = mesh.get_group("dp")
+    def __init__(self, loaders, process_group, check_finished=True):
+        if not isinstance(loaders, (list, tuple)):
+            loaders = [loaders]
+
+        self.loaders = loaders
+        self.pg = process_group
         self.check_finished = check_finished
         self.finished = torch.tensor(0, dtype=torch.float32, device="cuda")
 
     def __iter__(self):
-        self.loader_iter = iter(self.loader)
+        self.loader_iter = iter(self.loaders[0])
+        self.loader_idx = 0
 
         return self
 
     def __next__(self):
+        finished = False
+
         try:
             batch = next(self.loader_iter)
 
         except StopIteration:
-            finished = True
+            self.loader_idx += 1
 
-        else:
-            finished = False
+            if self.loader_idx < len(self.loaders):
+                self.loader_iter = iter(self.loaders[self.loader_idx])
+
+                try:
+                    batch = next(self.loader_iter)
+
+                except StopIteration:
+                    finished = True
+
+            else:
+                finished = True
 
         if not self.check_finished:
             return batch

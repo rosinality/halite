@@ -86,7 +86,7 @@ def train(
     parallel_dims,
     logger,
 ):
-    loader = iter(DataManager(train_loader, parallel_dims.mesh))
+    loader = iter(DataManager(train_loader, parallel_dims.mesh.get_group("dp")))
 
     train_iter = len(train_loader)
 

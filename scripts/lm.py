@@ -1,6 +1,7 @@
 import os
 
 import torch
+from torch import distributed as dist
 import torch.distributed.checkpoint as dcp
 from torch.distributed.checkpoint.state_dict import get_model_state_dict
 from torch import nn
@@ -13,7 +14,7 @@ try:
 except ImportError:
     wandb = None
 
-from halite.distributed import all_reduce_mean, all_reduce_flag
+from halite.distributed import all_reduce_mean
 from halite.data.dataloader import DataManager
 from halite.data.dataset import build_dataset_from_spec, WeightedIterableDataset
 from halite.logging import get_logger
@@ -29,7 +30,7 @@ def train(
     optimizer,
     scheduler,
     train_loader,
-    eval_loader,
+    eval_loaders,
     device,
     epoch,
     global_step,
@@ -49,7 +50,7 @@ def train(
 
     train_iter = len(train_loader)
 
-    loader = iter(DataManager(train_loader, parallel_dims.mesh))
+    loader = iter(DataManager(train_loader, parallel_dims.mesh.get_group("dp")))
 
     step = 0
     while True:
@@ -104,7 +105,9 @@ def train(
         if global_step % conf.output.log_step == 0:
             lr = optimizer.param_groups[0]["lr"]
 
-            loss_txt = "; ".join([f"{k}: {v:.5f}" for k, v in loss_dict.items()])
+            loss_txt = "; ".join(
+                [f"{k}: {v:.5f}" for k, v in loss_dict.items() if k != "loss_vals"]
+            )
 
             if grad_norm is None:
                 logger.info(
@@ -118,7 +121,9 @@ def train(
 
             if parallel_dims.is_primary and wandb is not None:
                 report = {"train/loss": loss, "train/lr": lr}
-                report.update({f"train/{k}": v for k, v in loss_dict.items()})
+                report.update(
+                    {f"train/{k}": v for k, v in loss_dict.items() if k != "loss_vals"}
+                )
 
                 if grad_norm is not None:
                     report["train/grad_norm"] = grad_norm
@@ -130,7 +135,7 @@ def train(
 
         if step % conf.training.eval_step == 0:
             eval_loss = evaluate(
-                conf, model, criterion, eval_loader, device, parallel_dims, logger
+                conf, model, criterion, eval_loaders, device, parallel_dims, logger
             )
             logging_loss(eval_loss, global_step, parallel_dims, logger)
 
@@ -143,16 +148,18 @@ def train(
 
 
 @torch.no_grad()
-def evaluate(conf, model, criterion, eval_loader, device, parallel_dims, logger):
+def evaluate(conf, model, criterion, eval_loaders, device, parallel_dims, logger):
     is_train = model.training
     model.eval()
 
-    length = len(eval_loader)
+    length = sum([len(loader) for loader in eval_loaders])
 
     step = 0
 
-    loader = iter(DataManager(eval_loader, parallel_dims.mesh))
+    loader = iter(DataManager(eval_loaders, parallel_dims.mesh))
     losses_sum = {}
+    losses_per_example = {}
+    losses_count = {}
 
     while True:
         try:
@@ -188,8 +195,24 @@ def evaluate(conf, model, criterion, eval_loader, device, parallel_dims, logger)
 
                     loss += aux_val
 
+        dataset_name = batch._meta_["samples_meta"][0]["dataset_name"]
+
+        if dataset_name not in losses_per_example:
+            losses_per_example[dataset_name] = float(loss_dict["cross entropy"])
+            losses_count[dataset_name] = 1
+
+        else:
+            losses_per_example[dataset_name] += float(loss_dict["cross entropy"])
+            losses_count[dataset_name] += 1
+
         if parallel_dims.is_primary and step % conf.output.log_step == 0:
-            logger.info(f"evaluating [{step}/{length}]; loss: {loss.item():.5f}")
+            loss_meters = []
+            for name, val in losses_per_example.items():
+                loss_meters.append(f"loss/{name}: {val / losses_count[name]:.5f}")
+
+            loss_meter = "; ".join(loss_meters)
+
+            logger.info(f"evaluating [{step}/{length}]; {loss_meter}")
 
         for key, val in loss_dict.items():
             val = val.float()
@@ -211,6 +234,24 @@ def evaluate(conf, model, criterion, eval_loader, device, parallel_dims, logger)
             )
 
             losses_sum[key] = val
+
+        gather_object = (losses_per_example, losses_count)
+        outputs = [None for _ in range(parallel_dims.dp)]
+        dist.all_gather_object(outputs, gather_object)
+
+        gathered_loss, gathered_count = outputs[0]
+        for loss_example, loss_count in outputs[1:]:
+            for name, val in loss_example.items():
+                if name not in gathered_loss:
+                    gathered_loss[name] = val
+                    gathered_count[name] = loss_count[name]
+
+                else:
+                    gathered_loss[name] += val
+                    gathered_count[name] += loss_count[name]
+
+        for name, val in gathered_loss.items():
+            losses_sum[f"loss/{name}"] = val / gathered_count[name]
 
     except:
         pass
@@ -253,8 +294,20 @@ def main():
     device = torch.device("cuda")
 
     if pdims.is_primary and wandb is not None:
-        wandb.require("core")
-        wandb.init(project="halite-lm")
+        project = conf.output.project
+        project = "halite-lm" if project is None else project
+
+        hparams = conf.hparams
+        name = conf.output.name
+
+        if (
+            hparams is not None
+            and conf.output.name is not None
+            and not isinstance(conf.output.name, str)
+        ):
+            name = instantiate(conf.output.name)(hparams)
+
+        wandb.init(project=project, name=name, config=hparams)
 
     torch.distributed.barrier()
 
@@ -289,7 +342,7 @@ def main():
     train_source, train_ratios, train_names = build_dataset_from_spec(
         conf.data.train, split="train", split_ratio=conf.data.train_ratio
     )
-    eval_source, eval_ratios, eval_names = build_dataset_from_spec(
+    eval_source, _, eval_names = build_dataset_from_spec(
         conf.data.eval, split="eval", split_ratio=conf.data.eval_ratio
     )
     preprocess_ops = []
@@ -309,40 +362,47 @@ def main():
         rank=mesh.get_local_rank("dp"),
         operations=preprocess_ops,
     )
-
-    eval_dset = WeightedIterableDataset(
-        eval_source,
-        eval_ratios,
-        eval_names,
-        num_replicas=pdims.dp,
-        rank=mesh.get_local_rank("dp"),
-        operations=preprocess_ops,
-    )
-
-    logger.info(f"train_dset\n{train_dset.summary()}")
-    logger.info(f"eval_dset\n{eval_dset.summary()}")
-
     train_loader = DataLoader(
         train_dset,
         batch_size=conf.training.train_batch_size // pdims.dp,
         collate_fn=collate_fn,
         num_workers=2,
     )
-    eval_loader = DataLoader(
-        eval_dset,
-        batch_size=conf.training.eval_batch_size // pdims.dp,
-        collate_fn=collate_fn,
-        num_workers=4,
-    )
+
+    logger.info(f"train_dset\n{train_dset.summary()}")
+
+    eval_loaders = []
+    eval_summaries = []
+    for eval_ds, eval_name in zip(eval_source, eval_names):
+        eval_dset = WeightedIterableDataset(
+            [eval_ds],
+            [1.0],
+            [eval_name],
+            num_replicas=pdims.dp,
+            rank=mesh.get_local_rank("dp"),
+            operations=preprocess_ops,
+            shuffle=False,
+        )
+        eval_loader = DataLoader(
+            eval_dset,
+            batch_size=conf.training.eval_batch_size // pdims.dp,
+            collate_fn=collate_fn,
+            num_workers=2,
+        )
+
+        eval_loaders.append(eval_loader)
+        eval_summaries.append(eval_dset.summary(total=False))
+
+    logger.info("eval_dset\n" + "\n".join(eval_summaries))
 
     logger.info("evaluating baseline")
-    eval_loss = evaluate(conf, model, criterion, eval_loader, device, pdims, logger)
+    eval_loss = evaluate(conf, model, criterion, eval_loaders, device, pdims, logger)
     logging_loss(eval_loss, 0, pdims, logger)
 
-    dcp.save(
-        get_model_state_dict(model),
-        checkpoint_id=os.path.join(conf.output.output_dir, "step-0"),
-    )
+    # dcp.save(
+    #    get_model_state_dict(model),
+    #    checkpoint_id=os.path.join(conf.output.output_dir, "step-0"),
+    # )
 
     logger.info("start training")
 
@@ -358,7 +418,7 @@ def main():
             optimizer,
             scheduler,
             train_loader,
-            eval_loader,
+            eval_loaders,
             device,
             epoch,
             global_step,
@@ -367,13 +427,13 @@ def main():
         )
 
     logger.info("final evaluation score")
-    eval_loss = evaluate(conf, model, criterion, eval_loader, device, pdims, logger)
+    eval_loss = evaluate(conf, model, criterion, eval_loaders, device, pdims, logger)
     logging_loss(eval_loss, global_step, pdims, logger)
 
-    dcp.save(
-        get_model_state_dict(model),
-        checkpoint_id=os.path.join(conf.output.output_dir, f"step-{global_step}"),
-    )
+    # dcp.save(
+    #    get_model_state_dict(model),
+    #    checkpoint_id=os.path.join(conf.output.output_dir, f"step-{global_step}"),
+    # )
 
 
 if __name__ == "__main__":

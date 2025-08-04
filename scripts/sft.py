@@ -50,7 +50,7 @@ def train(
 
     train_iter = len(train_loader)
 
-    loader = iter(DataManager(train_loader, parallel_dims.mesh))
+    loader = iter(DataManager(train_loader, parallel_dims.mesh.get_group("dp")))
 
     train_step_fn = instantiate(conf.training.train_step_fn)
 
