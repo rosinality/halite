@@ -143,7 +143,7 @@ class FinishReason:
 
 
 class Request:
-    def __init__(self, id, input_text, input_ids, sampling_params):
+    def __init__(self, id, input_ids, sampling_params, input_text=None):
         self.id = id
         self.input_text = input_text
         self.input_ids = input_ids

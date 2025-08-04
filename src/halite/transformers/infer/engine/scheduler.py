@@ -12,7 +12,7 @@ from halite.transformers.infer.engine.schedule_policy import (
     AddRequestResult,
 )
 from halite.transformers.infer.engine.radix_cache import RadixCache
-from halite.transformers.infer.types import ServerConfig
+from halite.transformers.infer.types import ServerConfig, InferenceRequest
 
 
 class Scheduler:
@@ -127,10 +127,23 @@ class Scheduler:
 
         for i, req in enumerate(requests):
             if isinstance(req, str):
-                req = Request(i, req, self.tokenizer.encode(req), SamplingParams())
+                req = Request(i, self.tokenizer.encode(req), SamplingParams(), req)
+
+            elif isinstance(req, InferenceRequest):
+                sampling_params = req.sampling_params
+
+                if not isinstance(sampling_params, SamplingParams):
+                    sampling_params = SamplingParams(**sampling_params)
+
+                req = Request(req.id, req.input_ids, sampling_params)
 
             elif isinstance(req, Sequence):
-                text_or_tokens, sampling_params = req
+                if len(req) == 2:
+                    text_or_tokens, sampling_params = req
+                    id = i
+
+                else:
+                    id, text_or_tokens, sampling_params = req
 
                 if isinstance(text_or_tokens, str):
                     input_text = text_or_tokens
@@ -143,7 +156,7 @@ class Scheduler:
                 if not isinstance(sampling_params, SamplingParams):
                     sampling_params = SamplingParams(**sampling_params)
 
-                req = Request(i, input_text, input_ids, sampling_params)
+                req = Request(id, input_ids, sampling_params, input_text)
 
             elif not isinstance(req, Request):
                 raise ValueError(f"Invalid request type: {type(req)}")
@@ -159,7 +172,7 @@ class Scheduler:
             self.handle_generate_request(req.id, req)
 
     def handle_generate_request(self, id, req):
-        req = Request(id, req.input_text, req.input_ids, req.sampling_params)
+        req = Request(id, req.input_ids, req.sampling_params, req.input_text)
 
         self.waiting_queue.append(req)
 
