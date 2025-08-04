@@ -238,6 +238,7 @@ class ModelRunner:
         self.cudagraph_outputs[batch_size] = output
         torch.cuda.synchronize()
 
+    @torch.inference_mode()
     def sample(self, logits, batch):
         sampling_params = batch.sampling_params
         next_token_ids = self.sampler.forward(logits, sampling_params)
