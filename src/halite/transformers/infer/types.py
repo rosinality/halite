@@ -1,8 +1,15 @@
 from dataclasses import dataclass
+from typing import Any, NamedTuple
 
 import torch
 
 from halite.transformers.infer.engine.batch import Batch, ForwardBatch
+
+
+class InferenceRequest(NamedTuple):
+    id: str
+    input_ids: list[int]
+    sampling_params: dict[str, Any]
 
 
 class InferenceResult:
@@ -139,7 +146,7 @@ class CUDAGraphState:
         self.forward_batch.input_ids[:batch_size] = forward_batch.input_ids
         self.forward_batch.kv_pool_ids[:batch_size] = forward_batch.kv_pool_ids
         self.forward_batch.seq_lens[:batch_size] = forward_batch.seq_lens
-        self.forward_batch.extend_lens[:batch_size] = forward_batch.extend_lens
+        # self.forward_batch.extend_lens[:batch_size] = forward_batch.extend_lens
         self.forward_batch.positions[:batch_size] = (forward_batch.seq_lens - 1).to(
             torch.int64
         )
