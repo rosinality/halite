@@ -74,6 +74,7 @@ class InferenceEngine:
             prefix_req.id = uuid.uuid4().hex
             prefix_req.sampling_params = copy.copy(prefix_req.sampling_params)
             prefix_req.sampling_params.max_new_tokens = 0
+            prefix_reqs.append(prefix_req)
 
         self.scheduler.infer_batch(prefix_reqs)
 
