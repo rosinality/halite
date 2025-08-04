@@ -1,4 +1,5 @@
 import argparse
+import uuid
 
 from slickconf import load_config, instantiate
 import torch.distributed.checkpoint as dcp
@@ -8,8 +9,8 @@ from halite.transformers.infer import InferenceEngine, ModelConfig
 
 from halite.projects.common.rollout import (
     RolloutGenerator,
+    Rollout,
     Handler,
-    Request,
     RewardRegistry,
 )
 from halite.projects.common.rollout_fn import Compose, Detokenize, ToTokenReward
@@ -94,17 +95,19 @@ if __name__ == "__main__":
 
     rollout = rollout_generator.generate(
         [
-            Request(
-                question1,
-                "math",
-                {"max_new_tokens": 512, "n": 4},
-                {"input_text": question1},
+            Rollout(
+                id=uuid.uuid4().hex,
+                input_ids=tokenizer.encode(question1),
+                type="math",
+                sampling_params={"max_new_tokens": 512, "n": 4},
+                state={"input_text": question1},
             ),
-            Request(
-                question2,
-                "arithmetic",
-                {"max_new_tokens": 512, "n": 4},
-                {"input_text": question2},
+            Rollout(
+                id=uuid.uuid4().hex,
+                input_ids=tokenizer.encode(question2),
+                type="arithmetic",
+                sampling_params={"max_new_tokens": 512, "n": 4},
+                state={"input_text": question2},
             ),
         ],
     )

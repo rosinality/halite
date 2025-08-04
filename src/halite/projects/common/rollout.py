@@ -1,19 +1,72 @@
 from collections import defaultdict
+from dataclasses import dataclass, field, fields, replace
 from random import Random
+from tarfile import LinkOutsideDestinationError
 from typing import Any, Callable, NamedTuple
+import uuid
 
 import torch
 
 from halite.data.record import Record
 from halite.projects.common.param import Param
 from halite.transformers.infer.engine.engine import InferenceEngine
+from halite.transformers.infer.types import InferenceRequest
 
 
-class Rollouts(NamedTuple):
-    samples: list[dict[str, Any]]
-    rewards: torch.Tensor
-    rewards_dict: dict[str, torch.Tensor]
-    sampling_params: list[dict[str, Any]]
+class Response(NamedTuple):
+    id: str
+    responses: list[list[int]]
+
+
+@dataclass
+class Rollout:
+    id: str
+    input_ids: list[int]
+    output_ids: list[int] | None = None
+    type: str | None = None
+    rewards: torch.Tensor | list[float] | None = None
+    rewards_dict: dict[str, torch.Tensor | float] | None = None
+    sampling_params: dict[str, Any] = field(default_factory=dict)
+    state: dict[str, Any] = field(default_factory=dict)
+
+    def to_inference_request(self) -> InferenceRequest:
+        return InferenceRequest(
+            id=self.id,
+            input_ids=self.input_ids,
+            sampling_params=self.sampling_params,
+        )
+
+    def _fields(self):
+        return [field.name for field in fields(self)]
+
+    def has_field(self, key: str):
+        return key in self._fields() or key in self.state
+
+    def get_field(self, key: str):
+        if key in self._fields():
+            return getattr(self, key)
+
+        else:
+            return self.state[key]
+
+    def set_field(self, key: str, value: Any):
+        if key in self._fields():
+            raise AttributeError(f"name `{key}` is overlaps with reserved fields")
+
+        else:
+            self.state[key] = value
+
+    def copy(self):
+        return Rollout(
+            id=self.id,
+            input_ids=self.input_ids,
+            output_ids=self.output_ids,
+            type=self.type,
+            rewards=self.rewards,
+            rewards_dict=self.rewards_dict,
+            sampling_params=self.sampling_params,
+            state=self.state.copy(),
+        )
 
 
 class Handler:
@@ -34,13 +87,6 @@ class Handler:
         self.reward_padding = reward_padding
 
 
-class Request(NamedTuple):
-    prompt: str
-    type: str
-    sampling_params: dict[str, Any] = {}
-    meta: dict[str, Any] = {}
-
-
 class RewardRegistry:
     def __init__(
         self,
@@ -55,17 +101,19 @@ class RewardRegistry:
                 "postprocess must be provided if there are multiple handlers"
             )
 
-    def __call__(self, data: list[dict[str, Any]], types: list[str]) -> torch.Tensor:
+    def __call__(self, rollouts: list[Rollout]) -> torch.Tensor:
         rewards_dict = {}
 
         for handler in self.handlers:
             handler_inputs = defaultdict(list)
             handler_ids = []
 
-            for i, (row, type) in enumerate(zip(data, types)):
+            for i, rollout in enumerate(rollouts):
+                type = rollout.type
+
                 if type in handler.targets or handler.targets == "*":
                     for key in handler.args:
-                        handler_inputs[key].append(row[key])
+                        handler_inputs[key].append(rollout.get_field(key))
 
                     handler_ids.append(i)
 
@@ -74,12 +122,12 @@ class RewardRegistry:
 
             if handler_output.ndim == 1:
                 handler_rewards = handler_output.new_full(
-                    (len(data),), handler.reward_padding
+                    (len(rollouts),), handler.reward_padding
                 )
 
             else:
                 handler_rewards = handler_output.new_full(
-                    (len(data), handler_output.shape[1]), handler.reward_padding
+                    (len(rollouts), handler_output.shape[1]), handler.reward_padding
                 )
 
             handler_rewards[handler_ids] = handler_output
@@ -87,12 +135,21 @@ class RewardRegistry:
             rewards_dict[handler.name] = handler_rewards
 
         if self.postprocess is not None:
-            rewards, rewards_dict = self.postprocess(rewards_dict, data, types)
+            rewards, rewards_dict = self.postprocess(rewards_dict, rollouts)
 
         else:
             rewards = next(iter(rewards_dict.values()))
 
-        return rewards, rewards_dict
+        rewards_dict_per_rollout = {k: v.unbind(0) for k, v in rewards_dict.items()}
+        rewards_per_rollout = rewards.unbind(0)
+
+        for i, (rollout, reward) in enumerate(zip(rollouts, rewards_per_rollout)):
+            rollout.rewards = reward
+            rollout.rewards_dict = {
+                k: v[i] for k, v in rewards_dict_per_rollout.items()
+            }
+
+        return rollouts
 
 
 class RequestBuilder:
@@ -100,6 +157,7 @@ class RequestBuilder:
         self,
         prompt_key: str,
         sampling_params: dict[str, Any],
+        tokenizer: Any | None = None,
         type: str | None = None,
         type_key: str | None = None,
         meta_maps: dict[str, str] | None = None,
@@ -114,6 +172,7 @@ class RequestBuilder:
         if type is None and type_key is None:
             raise ValueError("type or type_key must be provided")
 
+        self.tokenizer = tokenizer
         self.type = type
         self.type_key = type_key
         self.meta_maps = meta_maps
@@ -124,11 +183,18 @@ class RequestBuilder:
         if self.type_key is not None:
             target_keys.add(self.type_key)
 
-        requests = []
+        rollouts = []
         records = batch.unbind(target_keys)
 
-        for record in records:
-            prompt = record[self.prompt_key]
+        if self.tokenizer is not None:
+            prompts = self.tokenizer.encode_batch(
+                [record[self.prompt_key] for record in records]
+            )
+
+        else:
+            prompts = [record[self.prompt_key] for record in records]
+
+        for prompt, record in zip(prompts, records):
             sampling_param = self.sample_sampling_params()
 
             if self.type is not None:
@@ -137,11 +203,19 @@ class RequestBuilder:
             else:
                 type = record[self.type_key]
 
-            meta = {k: record[v] for k, v in self.meta_maps.items()}
+            state = {k: record[v] for k, v in self.meta_maps.items()}
 
-            requests.append(Request(prompt, type, sampling_param, meta))
+            rollouts.append(
+                Rollout(
+                    id=uuid.uuid4().hex,
+                    input_ids=prompt,
+                    type=type,
+                    sampling_params=sampling_param,
+                    state=state,
+                )
+            )
 
-        return requests
+        return rollouts
 
     def sample_sampling_params(self):
         sampled_params = {}
@@ -161,11 +235,13 @@ class RolloutGenerator:
         self,
         inference_engine: InferenceEngine,
         reward_registry: RewardRegistry,
-        preprocessors: list[Callable[[dict], dict]] | None = None,
+        preprocessors: list[Callable[[Rollout], Rollout]] | None = None,
+        finish_condition: Callable[[Rollout], bool] | None = None,
     ):
         self.inference_engine = inference_engine
         self.reward_registry = reward_registry
         self.preprocessors = preprocessors if preprocessors is not None else []
+        self.finish_condition = finish_condition
 
     def initialize(self):
         self.inference_engine.initialize()
@@ -176,46 +252,38 @@ class RolloutGenerator:
     def load_state_dict(self, state_dict, assign=True):
         self.inference_engine.load_state_dict(state_dict, assign=assign)
 
-    def generate(self, requests: list[Request]):
-        infer_requests = [
-            [request.prompt, request.sampling_params] for request in requests
-        ]
+    def generate(self, rollouts: list[Rollout]) -> list[Rollout]:
+        infer_requests = [rollout.to_inference_request() for rollout in rollouts]
 
         samples = self.inference_engine.infer_batch(infer_requests)
 
-        data = []
-        for sample in samples:
-            data.append(sample.to_dict())
+        samples_map = {sample.id: sample for sample in samples}
+        output_ids = []
 
-        samples_expand = []
-        request_types = []
-        sampling_params = []
+        for rollout in rollouts:
+            output_ids.append(samples_map[rollout.id].output_ids)
 
-        for i in range(len(data)):
-            row = data[i]
-            batch_row = requests[i].meta
+        return self.build_rollout(rollouts, output_ids)
 
-            assert set(batch_row.keys()).isdisjoint(
-                set(row.keys())
-            ), "duplicate key found between samples and batch"
+    def build_rollout(
+        self, rollouts: list[Rollout], output_ids: list[list[list[int]]]
+    ) -> list[Rollout]:
+        rollouts_expand = []
 
-            row.update(batch_row)
-
-            for output in row["output_ids"]:
-                expanded_row = row.copy()
-                expanded_row["output_ids"] = output
-                sampling_params.append(requests[i].sampling_params)
-                samples_expand.append(expanded_row)
-                request_types.append(requests[i].type)
+        for rollout, output_id in zip(rollouts, output_ids):
+            for output in output_id:
+                rollout_copy = rollout.copy()
+                rollout_copy.output_ids = output
+                rollouts_expand.append(rollout_copy)
 
         preprocessed_data = []
 
-        for sample in samples_expand:
+        for rollout in rollouts_expand:
             for preprocessor in self.preprocessors:
-                sample = preprocessor(sample)
+                rollout = preprocessor(rollout)
 
-            preprocessed_data.append(sample)
+            preprocessed_data.append(rollout)
 
-        rewards, rewards_dict = self.reward_registry(preprocessed_data, request_types)
+        rollouts = self.reward_registry(preprocessed_data)
 
-        return Rollouts(preprocessed_data, rewards, rewards_dict, sampling_params)
+        return rollouts

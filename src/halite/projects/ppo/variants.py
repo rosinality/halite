@@ -8,12 +8,12 @@ from halite.projects.ppo.types import (
     ActorLossMixin,
     Batch,
     CriticMetrics,
-    Rollouts,
+    RolloutBatch,
 )
 
 
 @torch.no_grad()
-def compute_critic_metrics(rollouts: Rollouts, response_mask: torch.Tensor):
+def compute_critic_metrics(rollouts: RolloutBatch, response_mask: torch.Tensor):
     advantage_mean = math_fn.masked_mean(rollouts.advantages, response_mask)
     advantage_var = math_fn.masked_var(
         rollouts.advantages, advantage_mean, response_mask
@@ -51,7 +51,7 @@ class PPOActorLoss:
     def compute_actor_loss(
         self,
         actor: Callable[[Batch], tuple[torch.Tensor, torch.Tensor]],
-        rollouts: Rollouts,
+        rollouts: RolloutBatch,
     ) -> PPOActorLossResults:
         actor_out, entropy = actor(rollouts.batch)
 
@@ -118,7 +118,7 @@ class PPOKLCovActorLoss:
     def compute_actor_loss(
         self,
         actor: Callable[[Batch], tuple[torch.Tensor, torch.Tensor]],
-        rollouts: Rollouts,
+        rollouts: RolloutBatch,
     ) -> PPOKLCovActorLossResults:
         log_probs, entropy = actor(rollouts.batch)
 
@@ -227,7 +227,7 @@ class PPOAdaptiveEntropyActorLoss:
     def compute_actor_loss(
         self,
         actor: Callable[[Batch], tuple[torch.Tensor, torch.Tensor]],
-        rollouts: Rollouts,
+        rollouts: RolloutBatch,
     ) -> PPOAdaptiveEntropyActorLossResults:
         actor_out, entropy = actor(rollouts.batch)
 

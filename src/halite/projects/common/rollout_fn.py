@@ -18,14 +18,16 @@ class Detokenize:
 
     def __call__(self, data):
         for i, key in enumerate(self.keys):
-            if key not in data:
+            if not data.has_field(key):
                 continue
 
             target_key = self.output_keys[i] if self.output_keys else key
 
-            detokenized = self.tokenizer.decode(data[key], **self.tokenizer_kwargs)
+            detokenized = self.tokenizer.decode(
+                data.get_field(key), **self.tokenizer_kwargs
+            )
 
-            data[target_key] = detokenized
+            data.set_field(target_key, detokenized)
 
         return data
 
@@ -34,9 +36,9 @@ class Compose:
     def __init__(self, *postprocessors):
         self.postprocessors = postprocessors
 
-    def __call__(self, rewards_dict, data, types):
+    def __call__(self, rewards_dict, rollouts):
         for postprocessor in self.postprocessors:
-            rewards, rewards_dict = postprocessor(rewards_dict, data, types)
+            rewards, rewards_dict = postprocessor(rewards_dict, rollouts)
 
         return rewards, rewards_dict
 
@@ -46,7 +48,7 @@ class WeightedSum:
         self.output_key = output_key
         self.weights = weights
 
-    def __call__(self, rewards_dict, data, types):
+    def __call__(self, rewards_dict, rollouts):
         rewards = 0
 
         for key, weight in self.weights.items():
@@ -63,8 +65,8 @@ class ToTokenReward:
         self.reward_key = reward_key
         self.output_key = output_key
 
-    def __call__(self, rewards_dict, data, types):
-        samples = [row[self.sample_key] for row in data]
+    def __call__(self, rewards_dict, rollouts):
+        samples = [rollout.get_field(self.sample_key) for rollout in rollouts]
         max_length = max(len(sample) for sample in samples)
         rewards = rewards_dict[self.reward_key]
         last_index = torch.tensor([len(sample) - 1 for sample in samples])
