@@ -183,6 +183,7 @@ class WeightedIterableDataset(data.IterableDataset):
         upsample=False,
         shuffle=True,
         seed=42,
+        ensure_divisible_to=1,
     ):
         self.num_replicas = num_replicas
         self.rank = rank
@@ -202,6 +203,12 @@ class WeightedIterableDataset(data.IterableDataset):
 
         self.datasets = datasets
         self.target_sample = torch.round(target_sample).to(torch.int64)
+
+        if ensure_divisible_to > 1:
+            self.target_sample = (
+                self.target_sample // ensure_divisible_to * ensure_divisible_to
+            )
+
         self.points = torch.cumsum(self.target_sample, 0).tolist()
         self.operations = [] if operations is None else operations
         self.shuffle = shuffle
@@ -213,7 +220,7 @@ class WeightedIterableDataset(data.IterableDataset):
     def __len__(self):
         return self.points[-1]
 
-    def summary(self):
+    def summary(self, total=True):
         res = []
 
         if self.names is not None:
@@ -230,7 +237,8 @@ class WeightedIterableDataset(data.IterableDataset):
             ):
                 res.append(f"#{i} size: {len(dset)} ratio: {ratio} sample: {sample}")
 
-        res.append(f"total: {len(self)}")
+        if total:
+            res.append(f"total: {len(self)}")
 
         return "\n".join(res)
 
