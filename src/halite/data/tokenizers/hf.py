@@ -41,6 +41,25 @@ class HFTokenizer:
 
         return t
 
+    def encode_batch(
+        self,
+        batch: Sequence[str],
+        *,
+        add_special_tokens: bool = True,
+        **postprocess_kwargs,
+    ) -> list[list[int]]:
+        ts = [
+            seq.ids
+            for seq in self.tokenizer._tokenizer.encode_batch(
+                batch, add_special_tokens=add_special_tokens
+            )
+        ]
+
+        if add_special_tokens:
+            ts = [self.postprocess_tokens(t, **postprocess_kwargs) for t in ts]
+
+        return ts
+
     def decode(self, t: Sequence[int]) -> str:
         return self.tokenizer.decode(t)
 
