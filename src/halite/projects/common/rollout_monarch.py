@@ -1,11 +1,14 @@
 import asyncio
 import copy
-from collections import defaultdict
 import math
 import uuid
+from typing import NamedTuple
 
-from monarch.actor import Actor, current_rank, endpoint
+from monarch.actor import Actor, endpoint
 import torch
+from torch.distributed.tensor import DTensor, Placement
+
+import wandb
 
 from halite.projects.common.rollout import Rollout, Response
 
@@ -16,6 +19,37 @@ class FinishedGeneration:
 
 class Empty:
     pass
+
+
+class TensorSpec(NamedTuple):
+    name: str
+    shape: tuple[int]
+    dtype: torch.dtype
+    placements: tuple[Placement] | None = None
+    full_shape: tuple[int] | None = None
+    stride: tuple[int] | None = None
+
+    @staticmethod
+    def from_tensor(name: str, tensor: torch.Tensor | DTensor):
+        if isinstance(tensor, DTensor):
+            return TensorSpec(
+                name=name,
+                shape=tensor.to_local().shape,
+                dtype=tensor.dtype,
+                placements=tensor.placements,
+                full_shape=tensor.shape,
+                stride=tensor.stride(),
+            )
+
+        return TensorSpec(
+            name=name,
+            shape=tensor.shape,
+            dtype=tensor.dtype,
+        )
+
+    @property
+    def is_dtensor(self):
+        return self.placements is not None
 
 
 def get_peer_ranks(rank, size, target_size, overlap_targets=False):
@@ -77,7 +111,7 @@ def infinite_loader(loader):
 
 
 class GeneratorWorker:
-    def __init__(self, inference_engine, trajectory_queue):
+    def __init__(self, inference_engine, trajectory_queue, global_pg, mesh_train, rank):
         self.scheduler = inference_engine.scheduler
         self.model = inference_engine.model_runner.model
 
@@ -85,14 +119,59 @@ class GeneratorWorker:
         self.training_condition = asyncio.Condition()
         self.training_finished = False
 
-    async def register_rdma_buffer(self, rdma_buffer):
-        self.rdma_buffer = rdma_buffer
+        self.global_pg = global_pg
+        self.mesh_train = mesh_train
+        self.device = self.model.device
+        self.rank = rank
+
+        self.update_event = asyncio.Event()
+
+    def set_state_dict_plans(self, state_dict_plans):
+        self.state_dict_plans = state_dict_plans
 
     async def update_state_dict(self):
-        state_dict = self.model.state_dict()
+        self.update_event.set()
 
-        for key, val in self.rdma_buffer.items():
-            await val.read_into(state_dict[key].view(torch.uint8).flatten())
+    def update_state_dict_recv(self):
+        received_tensors = {}
+
+        self.global_pg.group_start()
+
+        for tensor_spec in self.state_dict_plans:
+            tensor = torch.empty(
+                tensor_spec.shape, dtype=tensor_spec.dtype, device=self.device
+            )
+            self.global_pg.recv(tensor, self.rank)
+            received_tensors[tensor_spec.name] = (tensor, tensor_spec)
+
+        self.global_pg.group_end()
+
+        state_dict = self.model.state_dict()
+        received_state_dict = {}
+
+        for name, (tensor, tensor_spec) in received_tensors.items():
+            if not tensor_spec.is_dtensor:
+                received_state_dict[name] = tensor
+
+                continue
+
+            tensor = DTensor.from_local(
+                tensor,
+                self.mesh_train,
+                tensor_spec.placements,
+                shape=tensor_spec.full_shape,
+                stride=tensor_spec.stride,
+            )
+
+            target_tensor = state_dict[name]
+
+            if not isinstance(target_tensor, DTensor):
+                received_state_dict[name] = tensor.full_tensor()
+
+            else:
+                received_state_dict[name] = tensor
+
+        self.model.load_state_dict(received_state_dict)
 
     async def finished_training(self):
         async with self.training_condition:
@@ -114,6 +193,10 @@ class GeneratorWorker:
         fetched_requests = False
 
         while True:
+            if self.update_event.is_set():
+                self.update_state_dict_recv()
+                self.update_event.clear()
+
             if get_next_requests or finished:
                 requests = await self.trajectory_queue.get_input.call_one(
                     nowait=not finished
@@ -373,6 +456,10 @@ class BidirectionalQueue(Actor):
     def __init__(self):
         self.input_queue = asyncio.Queue()
         self.output_queue = asyncio.Queue()
+
+    @endpoint
+    async def initialize(self, name):
+        wandb.init(project="halite-ppo", name=name)
 
     @endpoint
     async def put_input(self, sample):
