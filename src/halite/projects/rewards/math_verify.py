@@ -1,9 +1,10 @@
 import functools
-from multiprocessing import Process, Queue
+import multiprocessing as mp
 import queue
 
 from math_verify.errors import TimeoutException
 from typing import Callable, Optional, Sequence
+from math_verify import grader, parser
 from math_verify.grader import verify
 from math_verify.parser import ExprExtractionConfig, ExtractionTarget, parse
 
@@ -54,6 +55,9 @@ def math_metric(
     def sample_level_fn(
         golds: list[str], predictions: list[str]
     ) -> tuple[float, Optional[tuple[list[str], list[str]]]]:
+        grader.TIMEOUT_WARNING_SHOWN = True
+        parser.TIMEOUT_WARNING_SHOWN = True
+
         extracted_predictions = [
             parse(pred, pred_extraction_target, parsing_timeout=None)
             for pred in predictions
@@ -102,6 +106,8 @@ def math_metric(
 
 def timeout(timeout_seconds):
     def decorator(fn):
+        ctx = mp.get_context("fork")
+
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             def worker(q):
@@ -112,8 +118,8 @@ def timeout(timeout_seconds):
                 except Exception as e:
                     q.put((False, e))
 
-            q = Queue()
-            process = Process(target=worker, args=(q,))
+            q = ctx.Queue()
+            process = ctx.Process(target=worker, args=(q,))
             process.start()
             process.join(timeout_seconds)
 
