@@ -69,6 +69,7 @@ class Training(Config):
 class Monarch(Config):
     generator_mesh_size: StrictInt = 1
     trainer_mesh_size: StrictInt = 1
+    param_dtype: str = "bfloat16"
 
 
 class PPOConfig(MainConfig):
