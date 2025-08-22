@@ -37,14 +37,16 @@ class ParallelDims:
     def is_primary(self):
         return dist.get_rank() == 0
 
-    def initialize(self):
+    def initialize(self, set_device_id=True):
         backend = "gloo"
         device_id = None
 
         if torch.cuda.is_available():
             torch.cuda.set_device(torch.cuda.device(self.local_rank))
             backend = "cpu:gloo,cuda:nccl"
-            device_id = torch.device(f"cuda:{self.local_rank}")
+
+            if set_device_id:
+                device_id = torch.device(f"cuda:{self.local_rank}")
 
         dist.init_process_group(backend, device_id=device_id)
 

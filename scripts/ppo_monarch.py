@@ -3,9 +3,10 @@ import gc
 import os
 
 from monarch.actor import Actor, current_rank, current_size, endpoint, proc_mesh
-from monarch.rdma import RDMABuffer
+from monarch.tensor_engine import RDMABuffer
 from slickconf import instantiate, load_arg_config
 import torch
+from torch.distributed.tensor import DTensor
 from torch import nn
 
 try:
@@ -20,7 +21,7 @@ from halite.distributed import (
     find_local_ip,
     load_checkpoint,
 )
-from torch.distributed.tensor import DTensor
+from halite.distributed.process_group import stateless_init_process_group
 from halite.data.dataloader import DataLoader
 from halite.data.dataset import build_dataset_from_spec, WeightedIterableDataset
 from halite.logging import get_logger
@@ -38,6 +39,7 @@ from halite.projects.common.rollout_monarch import (
     ReplayBuffer,
     BidirectionalQueue,
     RolloutWorker,
+    TensorSpec,
 )
 
 
@@ -173,13 +175,21 @@ class Trainer(Actor):
         self.generator = generator
 
     @endpoint
-    async def initialize(self, local_ranks):
+    async def initialize(
+        self, local_ranks, master_addr, master_port, world_size, rank_offset
+    ):
         os.environ["RANK"] = str(self.rank)
         os.environ["WORLD_SIZE"] = str(self.world_size)
 
         device = torch.device("cuda")
 
         self.device_id = local_ranks[self.rank]
+
+        self.global_pg = stateless_init_process_group(
+            master_addr, master_port, self.rank, world_size, self.device_id
+        )
+        self.rank_offset = rank_offset
+        self.param_dtype = get_torch_dtype(self.conf.monarch.param_dtype)
 
         pdims = ParallelDims(
             dp_replicate=self.conf.training.data_parallel_replicate,
@@ -189,7 +199,7 @@ class Trainer(Actor):
             local_rank=self.device_id,
             world_size=self.world_size,
         )
-        pdims.initialize()
+        pdims.initialize(set_device_id=False)
         mesh = pdims.build_mesh("cuda")
 
         self.parallel_dims = pdims
@@ -201,6 +211,10 @@ class Trainer(Actor):
         self.generator_ranks = get_peer_ranks(
             self.rank, self.world_size, self.generator.size()
         )
+
+        self.generators = []
+        for gen_rank in self.generator_ranks:
+            self.generators.append(self.generator.slice(gpus=gen_rank))
 
         if pdims.is_primary and wandb is not None:
             wandb.init(project="halite-ppo")
@@ -238,40 +252,39 @@ class Trainer(Actor):
             optimizer=self.optimizer,
         )
 
-    @torch.no_grad()
-    def _gather_state_dict(self):
+    async def send_state_dict_plans(self):
+        sd = self.trainer.actor.state_dict()
+
+        self.state_dict_plans = []
+
         with torch.no_grad():
-            state_dict = self.trainer.actor.state_dict()
-            state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
+            for k, v in sd.items():
+                k = k.replace("_orig_mod.", "")
+                v = v.to(self.param_dtype)
 
-            resharded = {}
+                self.state_dict_plans.append(TensorSpec.from_tensor(k, v))
 
-            for k, tensor in state_dict.items():
-                if isinstance(tensor, DTensor):
-                    tensor = tensor.full_tensor()
+        for generator in self.generators:
+            await generator.set_state_dict_plans.call_one(self.state_dict_plans)
 
-                resharded[k] = tensor
+    @torch.no_grad()
+    def update_state_dict(self):
+        state_dict = self.trainer.actor.state_dict()
+        state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
 
-        return resharded
+        self.global_pg.group_start()
 
-    def prepare_rdma_buffer(self):
-        self._rdma_buffer = {
-            k: RDMABuffer(v.view(torch.uint8).flatten())
-            for k, v in self._gather_state_dict().items()
-        }
+        for plan in self.state_dict_plans:
+            name = plan.name
+            tensor = state_dict[name]
 
-    async def update_state_dict(self):
-        state_dict = self._gather_state_dict()
+            if isinstance(tensor, DTensor):
+                tensor = tensor.to_local()
 
-        for k, tensor in state_dict.items():
-            await self._rdma_buffer[k].write(tensor.view(torch.uint8).flatten())
+            for generator_rank in self.generator_ranks:
+                self.global_pg.send(tensor, generator_rank + self.rank_offset)
 
-    def show_gpu_memory(self, title):
-        if self.parallel_dims.is_primary:
-            free_memory, _ = torch.cuda.mem_get_info(self.device_id)
-            free_memory = free_memory / (1 << 30)
-
-            print(f"{title}: {free_memory:.2f}GB")
+        self.global_pg.group_end()
 
     @endpoint
     async def run(self):
@@ -279,12 +292,7 @@ class Trainer(Actor):
 
         finished = False
 
-        self.prepare_rdma_buffer()
-
-        for gen_rank in self.generator_ranks:
-            generator = self.generator.slice(gpus=gen_rank)
-
-            await generator.register_rdma_buffer.call_one(self._rdma_buffer)
+        await self.send_state_dict_plans()
 
         while True:
             if finished:
@@ -340,12 +348,10 @@ class Trainer(Actor):
                 self.scheduler.step()
                 self.optimizer.step()
 
-            await self.update_state_dict()
-
-            for gen_rank in self.generator_ranks:
-                generator = self.generator.slice(gpus=gen_rank)
-
+            for generator in self.generators:
                 await generator.update_state_dict.call_one()
+
+            self.update_state_dict()
 
             if global_step == 0:
                 self.logger.info(
@@ -432,11 +438,22 @@ class Generator(Actor):
         self.trajectory_queue = trajectory_queue
 
     @endpoint
-    async def initialize(self, local_ranks):
+    async def initialize(
+        self, local_ranks, master_addr, master_port, world_size, rank_offset
+    ):
         os.environ["RANK"] = str(self.rank)
         os.environ["WORLD_SIZE"] = str(self.world_size)
 
         device = torch.device("cuda")
+
+        self.global_pg = stateless_init_process_group(
+            master_addr,
+            master_port,
+            self.rank + rank_offset,
+            world_size,
+            local_ranks[self.rank],
+        )
+        self.rank_offset = rank_offset
 
         pdims = ParallelDims(
             dp_replicate=self.conf.training.data_parallel_replicate,
@@ -446,7 +463,7 @@ class Generator(Actor):
             local_rank=local_ranks[self.rank],
             world_size=self.world_size,
         )
-        pdims.initialize()
+        pdims.initialize(set_device_id=False)
         mesh = pdims.build_mesh("cuda")
 
         with torch.device("meta"):
@@ -488,11 +505,14 @@ class Generator(Actor):
         self.generator = GeneratorWorker(
             inference_engine=inference_engine,
             trajectory_queue=self.trajectory_queue,
+            global_pg=self.global_pg,
+            mesh_train=mesh,
+            rank=self.rank,
         )
 
     @endpoint
-    async def register_rdma_buffer(self, rdma_buffer):
-        await self.generator.register_rdma_buffer(rdma_buffer)
+    async def set_state_dict_plans(self, state_dict_plans):
+        self.generator.set_state_dict_plans(state_dict_plans)
 
     @endpoint
     async def update_state_dict(self):
@@ -555,6 +575,7 @@ class RolloutManager(Actor):
             num_workers=2,
             rank=self.rank,
             drop_last=True,
+            multiprocessing_context="fork",
         )
 
         self.rollout = RolloutWorker(
@@ -593,7 +614,7 @@ async def main():
     conf = load_arg_config(PPOConfig)
 
     local_ip = find_local_ip()
-    free_ports = find_multiple_free_ports(2)
+    free_ports = find_multiple_free_ports(3)
 
     generator_mesh = await proc_mesh(
         gpus=conf.monarch.generator_mesh_size,
@@ -603,22 +624,29 @@ async def main():
         gpus=conf.monarch.trainer_mesh_size,
         env={"MASTER_ADDR": local_ip, "MASTER_PORT": str(free_ports[1])},
     )
+
+    await trainer_mesh.logging_option(True, None)
+    await generator_mesh.logging_option(True, None)
+
+    environment_mesh = await proc_mesh(gpus=conf.monarch.generator_mesh_size)
+    replay_buffers_mesh = await proc_mesh(gpus=conf.monarch.trainer_mesh_size)
+    trajectory_mesh = await proc_mesh(gpus=1)
+    environment_queue_mesh = await proc_mesh(gpus=1)
     rollout_mesh = await proc_mesh(gpus=1)
 
-    replay_buffers = await trainer_mesh.spawn(
+    replay_buffers = await replay_buffers_mesh.spawn(
         "replay_buffers",
         BasicReplayBuffer,
         conf.training.train_batch_size // conf.monarch.trainer_mesh_size,
     )
-    trajectory_queue = await rollout_mesh.spawn("trajectory_queue", BidirectionalQueue)
-    environment_queue = await rollout_mesh.spawn(
+    trajectory_queue = await trajectory_mesh.spawn(
+        "trajectory_queue", BidirectionalQueue
+    )
+    environment_queue = await environment_queue_mesh.spawn(
         "environment_queue", BidirectionalQueue
     )
     generator = await generator_mesh.spawn(
-        "generator",
-        Generator,
-        conf,
-        trajectory_queue,
+        "generator", Generator, conf, trajectory_queue
     )
     rollout_manager = await rollout_mesh.spawn(
         "rollout",
@@ -629,7 +657,7 @@ async def main():
         replay_buffers,
         conf.monarch.generator_mesh_size,
     )
-    environment = await generator_mesh.spawn(
+    environment = await environment_mesh.spawn(
         "environment",
         Environment,
         conf,
@@ -646,9 +674,23 @@ async def main():
         )
     ]
 
+    world_size = conf.monarch.generator_mesh_size + conf.monarch.trainer_mesh_size
+
     await asyncio.gather(
-        generator.initialize.call(local_ranks[: conf.monarch.generator_mesh_size]),
-        trainer.initialize.call(local_ranks[conf.monarch.generator_mesh_size :]),
+        generator.initialize.call(
+            local_ranks[conf.monarch.generator_mesh_size :],
+            local_ip,
+            free_ports[2],
+            world_size,
+            conf.monarch.generator_mesh_size,
+        ),
+        trainer.initialize.call(
+            local_ranks[: conf.monarch.generator_mesh_size],
+            local_ip,
+            free_ports[2],
+            world_size,
+            conf.monarch.generator_mesh_size,
+        ),
     )
 
     await asyncio.gather(
