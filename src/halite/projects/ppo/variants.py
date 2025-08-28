@@ -41,54 +41,112 @@ class PPOActorLossResults(ActorLossMixin):
     critic_metrics: CriticMetrics
 
 
+@dataclass
+class PPOActorLossIntermediateResults:
+    pg_loss: torch.Tensor
+    pg_loss1: torch.Tensor
+    pg_loss2: torch.Tensor
+    entropy: torch.Tensor
+    ratio: torch.Tensor
+    log_ratio: torch.Tensor
+    response_mask: torch.Tensor
+    pg_clipfrac: torch.Tensor
+    approx_kl: torch.Tensor
+
+
+def ppo_actor_loss(
+    actor,
+    rollouts,
+    clip_low,
+    clip_high,
+    pg_loss_agg,
+    pg_loss_max_tokens,
+    clip_importance_ratio,
+):
+    actor_out, entropy = actor(rollouts.batch)
+
+    log_ratio = actor_out - rollouts.actor_log_probs
+
+    ratio = torch.exp(log_ratio)
+
+    pg_loss1 = -rollouts.advantages * ratio
+    pg_loss2 = -rollouts.advantages * torch.clamp(
+        ratio, min=1 - clip_low, max=1 + clip_high
+    )
+    pg_loss = torch.maximum(pg_loss1, pg_loss2)
+
+    response_len = rollouts.batch.response_ids.shape[-1]
+    response_mask = rollouts.batch.attention_mask[:, -response_len:]
+
+    if clip_importance_ratio is not None:
+        imp_ratio = torch.exp(rollouts.actor_log_probs - rollouts.inference_log_probs)
+        imp_ratio = torch.clamp(imp_ratio, max=clip_importance_ratio)
+        pg_loss = pg_loss * imp_ratio
+
+    pg_loss = math_fn.aggregate_loss(
+        pg_loss,
+        response_mask,
+        pg_loss_agg,
+        pg_loss_max_tokens,
+    )
+
+    with torch.no_grad():
+        pg_clipfrac = math_fn.masked_mean(
+            (pg_loss2 > pg_loss1).to(torch.float32),
+            response_mask,
+        )
+        approx_kl = math_fn.masked_mean((ratio - 1) - log_ratio, response_mask)
+
+    return PPOActorLossIntermediateResults(
+        pg_loss=pg_loss,
+        pg_loss1=pg_loss1,
+        pg_loss2=pg_loss2,
+        entropy=entropy,
+        ratio=ratio,
+        log_ratio=log_ratio,
+        response_mask=response_mask,
+        pg_clipfrac=pg_clipfrac,
+        approx_kl=approx_kl,
+    )
+
+
 class PPOActorLoss:
-    def __init__(self, clip_low, clip_high, pg_loss_agg, pg_loss_max_tokens):
+    def __init__(
+        self,
+        clip_low,
+        clip_high,
+        pg_loss_agg,
+        pg_loss_max_tokens,
+        clip_importance_ratio=None,
+    ):
         self.clip_low = clip_low
         self.clip_high = clip_high
         self.pg_loss_agg = pg_loss_agg
         self.pg_loss_max_tokens = pg_loss_max_tokens
+        self.clip_importance_ratio = clip_importance_ratio
 
     def compute_actor_loss(
         self,
         actor: Callable[[Batch], tuple[torch.Tensor, torch.Tensor]],
         rollouts: RolloutBatch,
     ) -> PPOActorLossResults:
-        actor_out, entropy = actor(rollouts.batch)
-
-        log_ratio = actor_out - rollouts.actor_log_probs
-
-        ratio = torch.exp(log_ratio)
-
-        pg_loss1 = -rollouts.advantages * ratio
-        pg_loss2 = -rollouts.advantages * torch.clamp(
-            ratio, min=1 - self.clip_low, max=1 + self.clip_high
-        )
-        pg_loss = torch.maximum(pg_loss1, pg_loss2)
-
-        response_len = rollouts.batch.response_ids.shape[-1]
-        response_mask = rollouts.batch.attention_mask[:, -response_len:]
-
-        pg_loss = math_fn.aggregate_loss(
-            pg_loss,
-            response_mask,
+        results = ppo_actor_loss(
+            actor,
+            rollouts,
+            self.clip_low,
+            self.clip_high,
             self.pg_loss_agg,
             self.pg_loss_max_tokens,
+            self.clip_importance_ratio,
         )
 
-        with torch.no_grad():
-            pg_clipfrac = math_fn.masked_mean(
-                (pg_loss2 > pg_loss1).to(torch.float32),
-                response_mask,
-            )
-            approx_kl = math_fn.masked_mean((ratio - 1) - log_ratio, response_mask)
-
         return PPOActorLossResults(
-            loss=pg_loss,
-            pg_loss=pg_loss,
-            pg_clipfrac=pg_clipfrac,
-            entropy=entropy,
-            approx_kl=approx_kl,
-            critic_metrics=compute_critic_metrics(rollouts, response_mask),
+            loss=results.pg_loss,
+            pg_loss=results.pg_loss,
+            pg_clipfrac=results.pg_clipfrac,
+            entropy=results.entropy,
+            approx_kl=results.approx_kl,
+            critic_metrics=compute_critic_metrics(rollouts, results.response_mask),
         )
 
 
@@ -200,11 +258,13 @@ class PPOAdaptiveEntropyActorLoss:
         max_entropy_coef,
         entropy_coef_update_size,
         target_entropy,
+        clip_importance_ratio=None,
     ):
         self.clip_low = clip_low
         self.clip_high = clip_high
         self.pg_loss_agg = pg_loss_agg
         self.pg_loss_max_tokens = pg_loss_max_tokens
+        self.clip_importance_ratio = clip_importance_ratio
 
         self.entropy_coef = init_entropy_coef
         self.min_entropy_coef = min_entropy_coef
@@ -229,46 +289,27 @@ class PPOAdaptiveEntropyActorLoss:
         actor: Callable[[Batch], tuple[torch.Tensor, torch.Tensor]],
         rollouts: RolloutBatch,
     ) -> PPOAdaptiveEntropyActorLossResults:
-        actor_out, entropy = actor(rollouts.batch)
-
-        log_ratio = actor_out - rollouts.actor_log_probs
-
-        ratio = torch.exp(log_ratio)
-
-        pg_loss1 = -rollouts.advantages * ratio
-        pg_loss2 = -rollouts.advantages * torch.clamp(
-            ratio, min=1 - self.clip_low, max=1 + self.clip_high
-        )
-        pg_loss = torch.maximum(pg_loss1, pg_loss2)
-
-        response_len = rollouts.batch.response_ids.shape[-1]
-        response_mask = rollouts.batch.attention_mask[:, -response_len:]
-
-        pg_loss = math_fn.aggregate_loss(
-            pg_loss,
-            response_mask,
+        results = ppo_actor_loss(
+            actor,
+            rollouts,
+            self.clip_low,
+            self.clip_high,
             self.pg_loss_agg,
             self.pg_loss_max_tokens,
+            self.clip_importance_ratio,
         )
 
-        entropy = math_fn.masked_mean(entropy, response_mask)
+        entropy = math_fn.masked_mean(results.entropy, results.response_mask)
         self.update_entropy_coef(entropy.item())
 
-        loss = pg_loss  # - self.entropy_coef * entropy
-
-        with torch.no_grad():
-            pg_clipfrac = math_fn.masked_mean(
-                (pg_loss2 > pg_loss1).to(torch.float32),
-                response_mask,
-            )
-            approx_kl = math_fn.masked_mean((ratio - 1) - log_ratio, response_mask)
+        loss = results.pg_loss - self.entropy_coef * entropy
 
         return PPOAdaptiveEntropyActorLossResults(
             loss=loss,
-            pg_loss=pg_loss.detach(),
-            pg_clipfrac=pg_clipfrac,
+            pg_loss=results.pg_loss.detach(),
+            pg_clipfrac=results.pg_clipfrac,
             entropy=entropy.detach(),
-            approx_kl=approx_kl,
+            approx_kl=results.approx_kl,
             entropy_coef=self.entropy_coef,
-            critic_metrics=compute_critic_metrics(rollouts, response_mask),
+            critic_metrics=compute_critic_metrics(rollouts, results.response_mask),
         )
