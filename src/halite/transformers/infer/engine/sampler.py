@@ -1,10 +1,10 @@
-import torch
 from flashinfer.sampling import (
     min_p_sampling_from_probs,
     top_k_renorm_prob,
     top_k_top_p_sampling_from_probs,
     top_p_renorm_prob,
 )
+import torch
 
 from halite.logging import logger
 
@@ -27,6 +27,7 @@ class Sampler:
 
         if sampling_params.is_all_greedy:
             batch_next_token_ids = torch.argmax(logits, -1)
+            probs = torch.softmax(logits, -1)
 
         else:
             logits.div_(sampling_params.temperatures)
@@ -50,4 +51,10 @@ class Sampler:
                         filter_apply_order="joint",
                     )
 
-        return batch_next_token_ids.to(torch.int32)
+        next_logprobs = torch.log(
+            torch.take_along_dim(
+                probs, batch_next_token_ids.to(torch.int64).unsqueeze(-1), dim=-1
+            ).squeeze(-1)
+        )
+
+        return batch_next_token_ids.to(torch.int32), next_logprobs

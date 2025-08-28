@@ -17,6 +17,7 @@ class Batch(NamedTuple):
     prompt_len: torch.Tensor
     response_len: torch.Tensor
     temperatures: torch.Tensor | float
+    response_logprobs: torch.Tensor | None = None
 
     def split(self, batch_size):
         if self.input_ids.shape[0] % batch_size != 0:
@@ -48,6 +49,7 @@ class RolloutBatch(NamedTuple):
     advantages: torch.Tensor | None = None
     actor_log_probs: torch.Tensor | None = None
     actor_entropy: torch.Tensor | None = None
+    inference_log_probs: torch.Tensor | None = None
 
     def split(self, batch_size):
         if self.rewards.shape[0] % batch_size != 0:

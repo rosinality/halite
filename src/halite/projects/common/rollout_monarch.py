@@ -276,6 +276,9 @@ class GeneratorWorker:
                         Response(
                             id=req_id,
                             responses=[output[2] for output in output_buffer[req_id]],
+                            response_logprobs=[
+                                output[3] for output in output_buffer[req_id]
+                            ],
                         )
                     )
 
@@ -289,12 +292,15 @@ class EnvironmentWorker:
         self.environment_queue = environment_queue.slice(gpus=0)
 
     def interact(
-        self, rollouts: list[Rollout], generated_samples: list[list[list[int]]]
+        self,
+        rollouts: list[Rollout],
+        generated_samples: list[list[list[int]]],
+        generated_logprobs: list[list[list[float]]],
     ) -> tuple[list[Rollout], list[Rollout]]:
         unfinished_rollouts = []
 
         finished_rollouts = self.rollout_generator.build_rollout(
-            rollouts, generated_samples
+            rollouts, generated_samples, generated_logprobs
         )
 
         return finished_rollouts, unfinished_rollouts
@@ -306,9 +312,11 @@ class EnvironmentWorker:
             if isinstance(input, FinishedGeneration):
                 break
 
-            rollouts, samples = input
+            rollouts, samples, logprobs = input
 
-            finished_rollouts, unfinished_rollouts = self.interact(rollouts, samples)
+            finished_rollouts, unfinished_rollouts = self.interact(
+                rollouts, samples, logprobs
+            )
 
             await self.environment_queue.put_output.call_one(
                 (finished_rollouts, unfinished_rollouts)
@@ -381,9 +389,10 @@ class RolloutWorker:
                 rollout = rollouts_map[output.id]
                 generated_rollouts = [rollout]
                 generated_samples = [output.responses]
+                generated_logprobs = [output.response_logprobs]
 
                 await self.environment_queue.put_input.call_one(
-                    (generated_rollouts, generated_samples)
+                    (generated_rollouts, generated_samples, generated_logprobs)
                 )
 
             environment_output = await self.environment_queue.get_output.call_one(

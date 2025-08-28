@@ -290,15 +290,18 @@ class Scheduler:
 
     def run_batch(self, batch):
         if batch.mode.is_decode() or batch.extend_n_tokens != 0:
-            logits_output, next_token_ids = self.model_runner.forward_and_sample(batch)
+            logits_output, next_token_ids, next_logprobs = (
+                self.model_runner.forward_and_sample(batch)
+            )
 
         else:
             logits_output = None
             next_token_ids = torch.full((batch.batch_size(),), 0)
+            next_logprobs = torch.zeros((batch.batch_size(),))
 
         batch.output_ids = next_token_ids
 
-        return logits_output, next_token_ids, batch.id
+        return logits_output, next_token_ids, next_logprobs, batch.id
 
     def process_batch_result(self, batch, result):
         if batch.mode.is_decode():
@@ -313,14 +316,11 @@ class Scheduler:
         return out
 
     def process_batch_result_decode(self, batch, result):
-        logits_output, next_token_ids, batch_id = result
+        logits_output, next_token_ids, next_logprobs, batch_id = result
         self.n_generated_tokens += len(batch.requests)
 
         if batch.return_logprob:
-            next_token_logprobs = logits_output.next_token_logprobs[
-                torch.arange(len(next_token_ids), device=self.device),
-                next_token_ids,
-            ].tolist()
+            next_token_logprobs = next_logprobs.tolist()
 
         next_token_ids = next_token_ids.tolist()
 
@@ -338,9 +338,10 @@ class Scheduler:
                 self.tree_cache.cache_finished_request(req)
 
             if req.return_logprob:
-                req.output_logprobs.append((next_token_logprobs[i], next_token_id))
-                if req.top_logprobs_sum > 0:
-                    req.output_top_logprobs.append(logits_output.output_top_logprobs[i])
+                req.output_logprobs.append(next_token_logprobs[i])
+
+                # if req.top_logprobs_sum > 0:
+                #     req.output_top_logprobs.append(logits_output.output_top_logprobs[i])
 
         output = self.get_output(batch.requests)
 
@@ -349,23 +350,25 @@ class Scheduler:
         return output
 
     def process_batch_result_prefill(self, batch, result):
-        logits_output, next_token_ids, batch_id = result
+        logits_output, next_token_ids, next_logprobs, batch_id = result
 
+        # if batch.return_logprob:
+        #     logits_output.next_token_logprobs = logits_output.next_token_logprobs[
+        #         torch.arange(len(next_token_ids), device=self.device),
+        #         next_token_ids,
+        #     ].tolist()
+        #     logits_output.input_token_logprobs = (
+        #         logits_output.input_token_logprobs.tolist()
+        #     )
+        #     logits_output.normalized_prompt_logprob = (
+        #         logits_output.normalized_prompt_logprob.item()
+        #     )
         if batch.return_logprob:
-            logits_output.next_token_logprobs = logits_output.next_token_logprobs[
-                torch.arange(len(next_token_ids), device=self.device),
-                next_token_ids,
-            ].tolist()
-            logits_output.input_token_logprobs = (
-                logits_output.input_token_logprobs.tolist()
-            )
-            logits_output.normalized_prompt_logprob = (
-                logits_output.normalized_prompt_logprob.item()
-            )
+            next_token_logprobs = next_logprobs.tolist()
 
         next_token_ids = next_token_ids.tolist()
 
-        logprob_pt = 0
+        # logprob_pt = 0
         for i, req in enumerate(batch.requests):
             if req.is_retracted:
                 continue
@@ -381,9 +384,7 @@ class Scheduler:
                 self.tree_cache.cache_unfinished_request(req)
 
             if req.return_logprob:
-                logprob_pt += self.add_logprob_return_values(
-                    i, req, logprob_pt, next_token_ids, logits_output
-                )
+                req.output_logprobs.append(next_token_logprobs[i])
 
         return self.get_output(batch.requests)
 
@@ -392,6 +393,8 @@ class Scheduler:
 
         for req in requests:
             if req.finished():
-                results.append((req.id, req.input_ids, req.output_ids))
+                results.append(
+                    (req.id, req.input_ids, req.output_ids, req.output_logprobs)
+                )
 
         return results

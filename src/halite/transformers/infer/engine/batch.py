@@ -162,7 +162,7 @@ class Request:
         self.is_retracted = False
         self.completion_tokens_without_jump_forward = 0
 
-        self.return_logprob = False
+        self.return_logprob = True
         self.logprob_start_len = 0
         self.top_logprobs_num = 0
         self.normalized_prompt_logprob = None
@@ -289,6 +289,7 @@ class Batch:
         BATCH_ID += 1
 
         self.retract_decode_steps = 20
+        self.return_logprob = any(req.return_logprob for req in self.requests)
 
     def alloc_request_slots(self, n_requests: int):
         req_pool_ids = self.request_to_token_pool.alloc(n_requests)
@@ -353,8 +354,8 @@ class Batch:
         self.kv_pool_ids = kv_pool_ids
         self.seq_lens_sum = sum(seq_lens)
 
-        if self.return_logprob:
-            self.top_logprobs_nums = [req.top_logprobs_num for req in self.requests]
+        # if self.return_logprob:
+        #     self.top_logprobs_nums = [req.top_logprobs_num for req in self.requests]
 
         self.seq_lens = torch.tensor(seq_lens, dtype=torch.int32).to(
             self.device, non_blocking=True
@@ -428,10 +429,11 @@ class Batch:
         self.seq_lens_sum = self.seq_lens.sum().item()
         self.output_ids = self.output_ids[new_ids]
         self.return_logprob = any(req.return_logprob for req in self.requests)
-        if self.return_logprob:
-            self.top_logprobs_nums = [self.top_logprobs_nums[i] for i in keep_ids]
-        else:
-            self.top_logprobs_nums = None
+        # if self.return_logprob:
+        #     self.top_logprobs_nums = [self.top_logprobs_nums[i] for i in keep_ids]
+        # else:
+        #     self.top_logprobs_nums = None
+        self.top_logprobs_nums = None
 
         self.sampling_params.filter(keep_ids, new_ids)
 
