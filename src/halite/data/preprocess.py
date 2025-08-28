@@ -73,8 +73,8 @@ class ApplyTemplate:
             record[self.key] = self.template(record)
 
             yield record
-            
-            
+
+
 class ApplyFormat:
     def __init__(self, key, format):
         self.key = key
@@ -117,9 +117,10 @@ class SequencePackingState:
 
 
 class SequencePacking:
-    def __init__(self, length, key="text"):
+    def __init__(self, length, key="text", rewind=0):
         self.length = length
         self.key = key
+        self.rewind = rewind
 
         self._start = 0
         self._packed_ids = []
@@ -148,7 +149,7 @@ class SequencePacking:
 
             while len(self._tokens) >= self.length:
                 packed_ids = self._tokens[: self.length]
-                self._tokens = self._tokens[self.length :]
+                self._tokens = self._tokens[self.length - self.rewind :]
 
                 packed_record = {**input_record, self.key: packed_ids}
                 packed_record["_meta_"].update(

@@ -8,7 +8,7 @@ from halite.data import preprocess
 
 
 class TestDataset:
-    def __init__(self, n_samples, max_length, index_multiplier=1000):
+    def __init__(self, n_samples, max_length, index_multiplier=10):
         self.n_samples = n_samples
         self.max_length = max_length
         self.index_multiplier = index_multiplier
@@ -29,11 +29,13 @@ if __name__ == "__main__":
     parser.add_argument("--n_workers", type=int, default=1)
     parser.add_argument("--n_samples", type=int, default=100)
     parser.add_argument("--break_at", type=int, default=3)
+    parser.add_argument("--rewind", type=int, default=0)
+    parser.add_argument("--shuffle", action="store_true")
 
     args = parser.parse_args()
 
     preprocess_ops = [
-        preprocess.SequencePacking(args.length, key="data"),
+        preprocess.SequencePacking(args.length, key="data", rewind=args.rewind),
     ]
     ds = WeightedIterableDataset(
         [TestDataset(args.n_samples, args.length)],
@@ -42,6 +44,7 @@ if __name__ == "__main__":
         num_replicas=1,
         rank=0,
         operations=preprocess_ops,
+        shuffle=args.shuffle,
     )
     loader = DataLoader(
         ds,
@@ -49,7 +52,6 @@ if __name__ == "__main__":
         num_workers=args.n_workers,
         collate_fn=preprocess.Collator(keys=("data",)),
         rank=0,
-        check_finished=False,
         shuffle=False,
     )
 
