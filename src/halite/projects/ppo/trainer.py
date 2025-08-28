@@ -44,6 +44,14 @@ def build_batch_from_rollouts(
     position_ids = torch.zeros_like(input_ids)
     response_ids = input_ids.new_full((len(prompts), response_max_len), pad_id)
 
+    has_response_logprobs = rollouts[0].output_logprobs is not None
+    response_logprobs = None
+    if has_response_logprobs:
+        logprobs = [rollout.output_logprobs for rollout in rollouts]
+        response_logprobs = torch.zeros(
+            len(prompts), response_max_len, dtype=torch.float32, device=device
+        )
+
     for id, (prompt, response) in enumerate(zip(prompts, responses)):
         sample_prompt_len = len(prompt)
         sample_response_len = len(response)
@@ -69,6 +77,11 @@ def build_batch_from_rollouts(
 
         response_ids[id, :sample_response_len] = response_tensor
 
+        if has_response_logprobs:
+            response_logprobs[id, :sample_response_len] = torch.tensor(
+                logprobs[id], dtype=torch.float32, device=device
+            )
+
     temperatures = [
         rollout.sampling_params.get("temperature", 1.0) for rollout in rollouts
     ]
@@ -91,6 +104,7 @@ def build_batch_from_rollouts(
         prompt_len,
         response_len,
         temperatures,
+        response_logprobs,
     )
 
 
@@ -318,6 +332,7 @@ class PPOTrainer:
             returns=returns,
             actor_log_probs=actor_out,
             actor_entropy=actor_entropy,
+            inference_log_probs=batch.response_logprobs,
         )
 
     def compute_log_probs(self, batch):

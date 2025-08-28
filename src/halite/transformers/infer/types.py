@@ -18,7 +18,7 @@ class InferenceResult:
         id: int | str,
         input_ids: list[int] | None = None,
         output_ids: list[list[int]] | None = None,
-        logprobs: list[list[float]] | None = None,
+        output_logprobs: list[list[float]] | None = None,
         finish_reason: list[str] | None = None,
         num_cached_prompt_tokens: list[int] | None = None,
     ):
@@ -27,7 +27,7 @@ class InferenceResult:
         self.input_ids = [] if input_ids is None else input_ids
         self.output_ids = [] if output_ids is None else output_ids
 
-        self.logprobs = [] if logprobs is None else logprobs
+        self.output_logprobs = [] if output_logprobs is None else output_logprobs
         self.finish_reason = [] if finish_reason is None else finish_reason
         self.num_cached_prompt_tokens = (
             [] if num_cached_prompt_tokens is None else num_cached_prompt_tokens
@@ -36,7 +36,7 @@ class InferenceResult:
     def validate_lengths(self):
         if not (
             len(self.output_ids)
-            == len(self.logprobs)
+            == len(self.output_logprobs)
             == len(self.finish_reason)
             == len(self.num_cached_prompt_tokens)
         ):
@@ -49,6 +49,7 @@ class InferenceResult:
             "id": self.id,
             "input_ids": self.input_ids,
             "output_ids": self.output_ids,
+            "output_logprobs": self.output_logprobs,
         }
 
     def __repr__(self):
@@ -60,7 +61,7 @@ class InferenceResult:
 
         output_ids = ", ".join(str(out) for out in output_ids)
 
-        return f"InferenceResult(id={self.id}, input_ids={self.input_ids}, output_ids=[{output_ids}])"
+        return f"InferenceResult(id={self.id}, input_ids={self.input_ids}, output_ids=[{output_ids}], output_logprobs={self.output_logprobs})"
 
 
 @dataclass

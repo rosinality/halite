@@ -16,6 +16,7 @@ from halite.transformers.infer.types import InferenceRequest
 class Response(NamedTuple):
     id: str
     responses: list[list[int]]
+    response_logprobs: list[list[float]] | None = None
 
 
 @dataclass
@@ -23,6 +24,7 @@ class Rollout:
     id: str
     input_ids: list[int]
     output_ids: list[int] | None = None
+    output_logprobs: list[float] | None = None
     type: str | None = None
     rewards: torch.Tensor | list[float] | None = None
     rewards_dict: dict[str, torch.Tensor | float] | None = None
@@ -61,6 +63,7 @@ class Rollout:
             id=self.id,
             input_ids=self.input_ids,
             output_ids=self.output_ids,
+            output_logprobs=self.output_logprobs,
             type=self.type,
             rewards=self.rewards,
             rewards_dict=self.rewards_dict,
@@ -266,14 +269,21 @@ class RolloutGenerator:
         return self.build_rollout(rollouts, output_ids)
 
     def build_rollout(
-        self, rollouts: list[Rollout], output_ids: list[list[list[int]]]
+        self,
+        rollouts: list[Rollout],
+        output_ids: list[list[list[int]]],
+        output_logprobs: list[list[list[float]]] | None = None,
     ) -> list[Rollout]:
         rollouts_expand = []
 
-        for rollout, output_id in zip(rollouts, output_ids):
-            for output in output_id:
+        for i, (rollout, output_id) in enumerate(zip(rollouts, output_ids)):
+            for output_i, output in enumerate(output_id):
                 rollout_copy = rollout.copy()
                 rollout_copy.output_ids = output
+
+                if output_logprobs is not None:
+                    rollout_copy.output_logprobs = output_logprobs[i][output_i]
+
                 rollouts_expand.append(rollout_copy)
 
         preprocessed_data = []

@@ -64,8 +64,8 @@ class InferenceEngine:
             generated = sorted(generated, key=lambda x: x[0])
 
             return [
-                InferenceResult(id, input_ids, [output_ids])
-                for id, input_ids, output_ids in generated
+                InferenceResult(id, input_ids, [output_ids], [output_logprobs])
+                for id, input_ids, output_ids, output_logprobs in generated
             ]
 
         prefix_reqs = []
@@ -89,17 +89,18 @@ class InferenceEngine:
 
         generated = self.scheduler.infer_batch(gen_reqs)
         output_dict = {}
-        for id, input_id, output_id in generated:
+        for id, input_id, output_id, output_logprobs in generated:
             req_id = req_ids[id]
 
             if req_id not in output_dict:
-                output_dict[req_id] = (input_id, [])
+                output_dict[req_id] = (input_id, [], [])
 
             output_dict[req_id][1].append(output_id)
+            output_dict[req_id][2].append(output_logprobs)
 
         outputs = sorted(output_dict.items(), key=lambda x: x[0])
 
         return [
-            InferenceResult(id, input_ids, output_ids)
-            for id, (input_ids, output_ids) in outputs
+            InferenceResult(id, input_ids, output_ids, output_logprobs)
+            for id, (input_ids, output_ids, output_logprobs) in outputs
         ]

@@ -241,12 +241,12 @@ class ModelRunner:
     @torch.inference_mode()
     def sample(self, logits, batch):
         sampling_params = batch.sampling_params
-        next_token_ids = self.sampler.forward(logits, sampling_params)
+        next_token_ids, next_logprobs = self.sampler.forward(logits, sampling_params)
 
-        return next_token_ids
+        return next_token_ids, next_logprobs
 
     def forward_and_sample(self, batch):
         logits_output = self.forward(batch)
-        next_token_ids = self.sample(logits_output, batch)
+        next_token_ids, next_logprobs = self.sample(logits_output, batch)
 
-        return logits_output, next_token_ids
+        return logits_output, next_token_ids, next_logprobs
