@@ -103,6 +103,7 @@ def qwen3_0_6b_grpo():
             max_entropy_coef=0.005,
             entropy_coef_update_size=0.0001,
             target_entropy=0.2,
+            clip_importance_ratio=2.0,
         ),
         log_probs_batch_size=16,
     )
