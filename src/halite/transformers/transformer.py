@@ -11,17 +11,7 @@ from halite.transformers.cache_manager import AllocatedCacheManager
 from halite.transformers.container import ModuleDict
 from halite.transformers.generation import GenerationMixin
 from halite.transformers.model import ModelMixin
-
-
-@dataclass
-class TransformerDecoderOutput:
-    logits: Optional[torch.Tensor] = None
-    loss: Optional[torch.Tensor] = None
-    loss_dict: Optional[dict[str, torch.Tensor]] = None
-    last_hidden_state: Optional[torch.Tensor] = None
-    hidden_states: Optional[List[torch.Tensor]] = None
-    cache: Optional[Any] = None
-    aux_outputs: Optional[Any] = None
+from halite.transformers.types import TransformerDecoderOutput
 
 
 class TransformerConfig(Field):

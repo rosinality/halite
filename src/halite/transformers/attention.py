@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import NamedTuple
+
 
 import torch
 from torch import nn
@@ -27,6 +27,7 @@ except ImportError:
     pass
 
 from halite.transformers.initialize import init_weights
+from halite.transformers.types import UnpadParams
 
 
 class AttentionCache:
@@ -47,17 +48,6 @@ class AttentionCache:
         return AttentionCache(key, value, self.length, self.n_head)
 
 
-class UnpadParams(NamedTuple):
-    batch: int
-    seqlen: int
-    indices_q: torch.Tensor
-    cu_seqlens_q: torch.Tensor
-    max_length_q: int
-    indices_k: torch.Tensor
-    cu_seqlens_k: torch.Tensor
-    max_length_k: int
-
-
 def unpad_params(padding_mask):
     lengths = padding_mask.sum(-1, dtype=torch.int32)
     indices = torch.nonzero(padding_mask.flatten(), as_tuple=False).flatten()
@@ -65,11 +55,11 @@ def unpad_params(padding_mask):
     cu_seqlens = F.pad(torch.cumsum(lengths, 0, dtype=torch.int32), (1, 0))
 
     return UnpadParams(
+        cu_seqlens,
+        max_length,
         padding_mask.shape[0],
         padding_mask.shape[-1],
         indices,
-        cu_seqlens,
-        max_length,
         indices,
         cu_seqlens,
         max_length,
