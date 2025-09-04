@@ -1,6 +1,7 @@
 import argparse
 import random
 import fnmatch
+import pickle
 
 from tqdm import tqdm
 from array_record.python.array_record_module import ArrayRecordWriter
@@ -15,10 +16,12 @@ from functools import partial
 import fsspec
 
 
-def write_arrayrecord(parquet_files, output_fp, protocol, pbar=None, batch_size=1000):
+def write_arrayrecord(
+    parquet_files, output_fp, protocol, pbar=None, batch_size=1000, token=None
+):
     import pyarrow.parquet as pq
 
-    fs = fsspec.filesystem(protocol)
+    fs = fsspec.filesystem(protocol, token=token)
 
     for file in parquet_files:
         if pbar is not None:
@@ -31,29 +34,85 @@ def write_arrayrecord(parquet_files, output_fp, protocol, pbar=None, batch_size=
                     documents = batch.to_pylist()
 
                     for document in documents:
-                        output_fp.write(document["text"].encode("utf-8"))
+                        output_fp.write(pickle.dumps(document))
 
                         if pbar is not None:
                             pbar.update(1)
 
 
+def write_ffrecord(
+    parquet_files, output_path, protocol, pbar=None, batch_size=1000, token=None
+):
+    import pyarrow.parquet as pq
+    from ffrecord import FileWriter
+
+    fs = fsspec.filesystem(protocol, token=token)
+
+    for file in parquet_files:
+        if pbar is not None:
+            basename = os.path.basename(file)
+            pbar.set_description(basename)
+
+        with fs.open(file, "rb") as f:
+            with pq.ParquetFile(f) as pqf:
+                writer = FileWriter(output_path, pqf.metadata.num_rows)
+
+                for batch in pqf.iter_batches(batch_size=batch_size):
+                    documents = batch.to_pylist()
+
+                    for document in documents:
+                        writer.write_one(pickle.dumps(document))
+
+                        if pbar is not None:
+                            pbar.update(1)
+
+                writer.close()
+
+
 def parquet_to_arrayrecord(
-    index_filenames, protocol, output_path, prefix, max_file, batch_size=1000
+    index_filenames,
+    protocol,
+    output_path,
+    prefix,
+    max_file,
+    batch_size=1000,
+    format="arrayrecord",
+    token=None,
 ):
     index, filenames = index_filenames
     pbar = tqdm(dynamic_ncols=True, position=index % 16)
     digits = math.ceil(math.log10(max_file))
     shard_id = str(index + 1).zfill(digits)
     max_shard_id = str(max_file).zfill(digits)
-    basename = f"{prefix}-{shard_id}-of-{max_shard_id}.arrayrecord"
 
-    writer = ArrayRecordWriter(os.path.join(output_path, basename), "group_size:1")
-    write_arrayrecord(filenames, writer, protocol, pbar, batch_size)
-    writer.close()
+    if format == "arrayrecord":
+        basename = f"{prefix}-{shard_id}-of-{max_shard_id}.arrayrecord"
+
+        writer = ArrayRecordWriter(os.path.join(output_path, basename), "group_size:1")
+        write_arrayrecord(filenames, writer, protocol, pbar, batch_size, token)
+        writer.close()
+
+    elif format == "ffrecord":
+        basename = f"{prefix}-{shard_id}-of-{max_shard_id}.ffr"
+
+        write_ffrecord(
+            filenames,
+            os.path.join(output_path, basename),
+            protocol,
+            pbar,
+            batch_size,
+            token,
+        )
 
 
 def parquet_to_arrayrecord_gcp(
-    index_filenames, protocol, output_path, prefix, max_file, batch_size=1000
+    index_filenames,
+    protocol,
+    output_path,
+    prefix,
+    max_file,
+    batch_size=1000,
+    token=None,
 ):
     index, filenames = index_filenames
 
@@ -63,7 +122,7 @@ def parquet_to_arrayrecord_gcp(
 
     with tempfile.NamedTemporaryFile() as tmp:
         writer = ArrayRecordWriter(tmp.name, "group_size:1")
-        write_arrayrecord(filenames, writer, protocol, pbar, batch_size)
+        write_arrayrecord(filenames, writer, protocol, pbar, batch_size, token)
         writer.close()
 
         digits = math.ceil(math.log10(max_file))
@@ -111,11 +170,13 @@ if __name__ == "__main__":
     parser.add_argument("--concurrency", type=int, default=16)
     parser.add_argument("--shard_size", type=str, default=None)
     parser.add_argument("--max_size", type=str, default=None)
+    parser.add_argument("--token", type=str, default=None)
+    parser.add_argument("--format", type=str, default="arrayrecord")
     parser.add_argument("path", type=str)
 
     args = parser.parse_args()
 
-    fs = fsspec.filesystem("hf")
+    fs = fsspec.filesystem("hf", token=args.token)
 
     files = fs.find(args.path)
     files = fnmatch.filter(files, args.pattern)
@@ -158,6 +219,7 @@ if __name__ == "__main__":
 
         else:
             filenames.append((shard_id, (file,)))
+            shard_id += 1
 
     print("total shards", len(filenames))
     print(
@@ -186,6 +248,8 @@ if __name__ == "__main__":
             output_path=args.output,
             prefix="data",
             max_file=len(filenames),
+            format=args.format,
+            token=args.token,
         )
 
         for _ in pool.imap_unordered(worker, filenames):
