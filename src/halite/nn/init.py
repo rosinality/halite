@@ -28,6 +28,7 @@ def calculate_fan(
 def kaiming_normal_(
     tensor: torch.Tensor,
     a: float = 0,
+    scale: float = 1.0,
     mode: str = "fan_in",
     nonlinearity: str = "leaky_relu",
     truncate: float | None = None,
@@ -38,7 +39,7 @@ def kaiming_normal_(
 ):
     fan = calculate_fan(tensor, mode, fan_in_dim, fan_out_dim, divide_dim)
     gain = init.calculate_gain(nonlinearity, a)
-    std = gain / math.sqrt(fan)
+    std = gain / math.sqrt(fan) * scale
 
     if truncate is not None:
         bound = truncate * std
@@ -49,3 +50,26 @@ def kaiming_normal_(
 
     else:
         init.normal_(tensor, mean=0, std=std, generator=generator)
+
+
+def kaiming_linear_(
+    tensor: torch.Tensor,
+    scale: float = 1.0,
+    mode: str = "fan_in",
+    truncate: float | None = 3,
+    fan_in_dim: tuple[int, ...] = (1,),
+    fan_out_dim: tuple[int, ...] = (0,),
+    divide_dim: int = 1,
+    generator: torch.Generator | None = None,
+):
+    kaiming_normal_(
+        tensor,
+        scale=scale,
+        mode=mode,
+        nonlinearity="linear",
+        truncate=truncate,
+        fan_in_dim=fan_in_dim,
+        fan_out_dim=fan_out_dim,
+        divide_dim=divide_dim,
+        generator=generator,
+    )
