@@ -4,6 +4,9 @@ from operator import inv
 import torch
 from torch import nn
 
+from halite.transformers.ops.rotary import apply_rotary
+from halite.transformers.types import UnpadParams
+
 
 def make_causal_mask(batch_size, query_length, key_length, device):
     if query_length <= 1:
@@ -97,6 +100,7 @@ class RotaryEmbedding(nn.Module):
         device=None,
         use_complex=False,
         use_rotate_half=False,
+        use_fused=False,
         pre_init=False,
         use_fp32=False,
     ):
@@ -108,6 +112,7 @@ class RotaryEmbedding(nn.Module):
         self.device = device
         self.use_complex = use_complex
         self.use_rotate_half = use_rotate_half
+        self.use_fused = use_fused
         self.pre_init = pre_init
         self.use_fp32 = use_fp32
 
@@ -149,7 +154,11 @@ class RotaryEmbedding(nn.Module):
 
         cos, sin = freqs.cos(), freqs.sin()
 
-        if self.use_rotate_half:
+        if self.use_fused:
+            self.cos = cos
+            self.sin = sin
+
+        elif self.use_rotate_half:
             self.cos = torch.cat((cos, cos), -1)
             self.sin = torch.cat((sin, sin), -1)
 
@@ -159,7 +168,7 @@ class RotaryEmbedding(nn.Module):
             )
 
     def cast_cache(self, device, dtype):
-        if self.use_rotate_half:
+        if self.use_rotate_half or self.use_fused:
             self.cos = self.cos.to(
                 device, dtype=torch.float32 if self.use_fp32 else dtype
             )
@@ -171,16 +180,26 @@ class RotaryEmbedding(nn.Module):
 
         self.freqs_cis = self.freqs_cis.to(device)
 
-    def forward(self, position_ids, seq_len=None, device=None, dtype=None):
+    def forward(
+        self,
+        position_ids: torch.Tensor | None,
+        seq_len: int | None = None,
+        unpad_params: UnpadParams | None = None,
+        device=None,
+        dtype=None,
+    ):
         if seq_len > self.max_seq_len_cached:
             self.init_cache(seq_len=seq_len, device=device, dtype=dtype)
 
-        self.cast_cache(position_ids.device, dtype)
+        self.cast_cache(device, dtype)
 
         if self.use_complex:
             freqs_cis = self.freqs_cis[position_ids].unsqueeze(-2)
 
             return freqs_cis
+
+        if self.use_fused:
+            return self.cos, self.sin, unpad_params
 
         if self.use_rotate_half:
             cos = self.cos[position_ids]
@@ -189,11 +208,6 @@ class RotaryEmbedding(nn.Module):
             return cos, sin
 
         return self.freqs_cis[position_ids].unsqueeze(-4)
-
-        # cos = self.cos_cache[position_ids].unsqueeze(-2).to(device=device, dtype=dtype)
-        # sin = self.sin_cache[position_ids].unsqueeze(-2).to(device=device, dtype=dtype)
-
-        # return cos, sin
 
 
 class LinearRoPE(RotaryEmbedding):
@@ -287,7 +301,15 @@ def apply_rotary_emb_complex(query, key, pos_embed):
     return query_c.type_as(query), key_c.type_as(key)
 
 
-def apply_rotary_emb(query, key, pos_embed, use_fp32=False, use_complex=False):
+def apply_rotary_emb(
+    query,
+    key,
+    pos_embed,
+    use_fp32=False,
+    use_complex=False,
+    use_fused=False,
+    inplace=False,
+):
     if use_complex:
         return apply_rotary_emb_complex(query, key, pos_embed)
 
@@ -296,6 +318,31 @@ def apply_rotary_emb(query, key, pos_embed, use_fp32=False, use_complex=False):
     if use_fp32:
         query = query.to(torch.float32)
         key = key.to(torch.float32)
+
+    if use_fused:
+        cos, sin, unpad_params = pos_embed
+
+        cos = cos.to(query.dtype)
+        sin = sin.to(query.dtype)
+
+        q_embed = apply_rotary(
+            query,
+            cos,
+            sin,
+            inplace=inplace,
+            cu_seqlens=unpad_params.cu_seqlens_q,
+            max_seqlen=unpad_params.max_length_q,
+        )
+        k_embed = apply_rotary(
+            key,
+            cos,
+            sin,
+            inplace=inplace,
+            cu_seqlens=unpad_params.cu_seqlens_k,
+            max_seqlen=unpad_params.max_length_k,
+        )
+
+        return q_embed.to(dtype), k_embed.to(dtype)
 
     if isinstance(pos_embed, tuple):
         cos, sin = pos_embed
