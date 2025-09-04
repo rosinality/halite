@@ -4,7 +4,7 @@ import torch
 from torch import nn
 from torch.distributed.tensor.parallel import SequenceParallel
 
-from halite.transformers.attention import UnpadParams
+from halite.transformers.types import UnpadParams
 
 
 class TransformerEncoderBlock(nn.Module):
