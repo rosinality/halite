@@ -310,10 +310,13 @@ class Trainer(Actor):
                 rollout_batches = rollouts.split(self.conf.training.ppo_minibatch_size)
 
             metrics = []
-            for _ in range(self.conf.training.ppo_n_epochs):
-                self.optimizer.zero_grad(set_to_none=True)
 
+            self.scheduler.step()
+
+            for _ in range(self.conf.training.ppo_n_epochs):
                 for rollout_batch in rollout_batches:
+                    self.optimizer.zero_grad(set_to_none=True)
+
                     rollout_microbatches = [rollout_batch]
 
                     if self.conf.training.ppo_microbatch_size is not None:
@@ -337,16 +340,15 @@ class Trainer(Actor):
 
                         metrics.append(loss_dict)
 
-                grad_norm = None
-                if self.conf.training.clip_grad_norm is not None:
-                    grad_norm = nn.utils.clip_grad_norm_(
-                        self.trainer.actor.parameters(),
-                        self.conf.training.clip_grad_norm,
-                        foreach=True,
-                    )
+                    grad_norm = None
+                    if self.conf.training.clip_grad_norm is not None:
+                        grad_norm = nn.utils.clip_grad_norm_(
+                            self.trainer.actor.parameters(),
+                            self.conf.training.clip_grad_norm,
+                            foreach=True,
+                        )
 
-                self.scheduler.step()
-                self.optimizer.step()
+                    self.optimizer.step()
 
             for generator in self.generators:
                 await generator.update_state_dict.call_one()

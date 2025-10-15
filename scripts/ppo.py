@@ -117,10 +117,13 @@ def train(
             rollout_batches = rollout.split(conf.training.ppo_minibatch_size)
 
         metrics = []
-        for _ in range(conf.training.ppo_n_epochs):
-            optimizer.zero_grad(set_to_none=True)
 
+        scheduler.step()
+
+        for _ in range(conf.training.ppo_n_epochs):
             for rollout_batch in rollout_batches:
+                optimizer.zero_grad(set_to_none=True)
+
                 rollout_microbatches = [rollout_batch]
 
                 if conf.training.ppo_microbatch_size is not None:
@@ -144,16 +147,15 @@ def train(
 
                     metrics.append(loss_dict)
 
-            grad_norm = None
-            if conf.training.clip_grad_norm is not None:
-                grad_norm = nn.utils.clip_grad_norm_(
-                    trainer.actor.parameters(),
-                    conf.training.clip_grad_norm,
-                    foreach=True,
-                )
+                grad_norm = None
+                if conf.training.clip_grad_norm is not None:
+                    grad_norm = nn.utils.clip_grad_norm_(
+                        trainer.actor.parameters(),
+                        conf.training.clip_grad_norm,
+                        foreach=True,
+                    )
 
-            scheduler.step()
-            optimizer.step()
+                optimizer.step()
 
         if global_step == 0:
             logger.info(
