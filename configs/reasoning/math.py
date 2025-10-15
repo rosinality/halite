@@ -56,7 +56,7 @@ conf.training = field(
     eval_batch_size=8,
     max_iter=max_iter,
     ppo_minibatch_size=128,
-    ppo_microbatch_size=8,
+    ppo_microbatch_size=4,
     ppo_n_epochs=1,
     train_step_fn=partial(basic_train_step),
     optimizer=partial(optim.AdamW, lr=lr, betas=(0.9, 0.95)),
