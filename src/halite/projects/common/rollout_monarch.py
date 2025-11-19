@@ -5,6 +5,7 @@ import uuid
 from typing import NamedTuple
 
 from monarch.actor import Actor, endpoint
+from monarch.rdma import RDMABuffer
 import torch
 from torch.distributed.tensor import DTensor, Placement
 
@@ -28,9 +29,20 @@ class TensorSpec(NamedTuple):
     placements: tuple[Placement] | None = None
     full_shape: tuple[int] | None = None
     stride: tuple[int] | None = None
+    rdma_buffer: RDMABuffer | None = None
 
     @staticmethod
-    def from_tensor(name: str, tensor: torch.Tensor | DTensor):
+    def from_tensor(name: str, tensor: torch.Tensor | DTensor, use_rdma: bool = False):
+        rdma_buffer = None
+
+        if use_rdma:
+            rdma_tensor = tensor
+
+            if isinstance(tensor, DTensor):
+                rdma_tensor = tensor.to_local()
+
+            rdma_buffer = RDMABuffer(rdma_tensor.view(torch.uint8).flatten())
+
         if isinstance(tensor, DTensor):
             return TensorSpec(
                 name=name,
@@ -39,12 +51,14 @@ class TensorSpec(NamedTuple):
                 placements=tensor.placements,
                 full_shape=tensor.shape,
                 stride=tensor.stride(),
+                rdma_buffer=rdma_buffer,
             )
 
         return TensorSpec(
             name=name,
             shape=tensor.shape,
             dtype=tensor.dtype,
+            rdma_buffer=rdma_buffer,
         )
 
     @property
@@ -111,7 +125,15 @@ def infinite_loader(loader):
 
 
 class GeneratorWorker:
-    def __init__(self, inference_engine, trajectory_queue, global_pg, mesh_train, rank):
+    def __init__(
+        self,
+        inference_engine,
+        trajectory_queue,
+        global_pg,
+        mesh_train,
+        rank,
+        use_rdma=False,
+    ):
         self.scheduler = inference_engine.scheduler
         self.model = inference_engine.model_runner.model
 
@@ -123,6 +145,7 @@ class GeneratorWorker:
         self.mesh_train = mesh_train
         self.device = self.model.device
         self.rank = rank
+        self.use_rdma = use_rdma
 
         self.update_event = asyncio.Event()
 
@@ -173,6 +196,43 @@ class GeneratorWorker:
 
         self.model.load_state_dict(received_state_dict)
 
+    def update_state_dict_rdma(self):
+        received_tensors = {}
+
+        for tensor_spec in self.state_dict_plans:
+            tensor = torch.empty(
+                tensor_spec.shape, dtype=tensor_spec.dtype, device=self.device
+            )
+            tensor_spec.rdma_buffer.read_into(tensor.view(torch.uint8).flatten())
+            received_tensors[tensor_spec.name] = (tensor, tensor_spec)
+
+        state_dict = self.model.state_dict()
+        received_state_dict = {}
+
+        for name, (tensor, tensor_spec) in received_tensors.items():
+            if not tensor_spec.is_dtensor:
+                received_state_dict[name] = tensor
+
+                continue
+
+            tensor = DTensor.from_local(
+                tensor,
+                self.mesh_train,
+                tensor_spec.placements,
+                shape=tensor_spec.full_shape,
+                stride=tensor_spec.stride,
+            )
+
+            target_tensor = state_dict[name]
+
+            if not isinstance(target_tensor, DTensor):
+                received_state_dict[name] = tensor.full_tensor()
+
+            else:
+                received_state_dict[name] = tensor
+
+        self.model.load_state_dict(received_state_dict)
+
     async def finished_training(self):
         async with self.training_condition:
             self.training_finished = True
@@ -194,7 +254,12 @@ class GeneratorWorker:
 
         while True:
             if self.update_event.is_set():
-                self.update_state_dict_recv()
+                if self.use_rdma:
+                    self.update_state_dict_rdma()
+
+                else:
+                    self.update_state_dict_recv()
+
                 self.update_event.clear()
 
             if get_next_requests or finished:

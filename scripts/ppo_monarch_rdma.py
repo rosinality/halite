@@ -270,7 +270,9 @@ class Trainer(Actor):
                 k = k.replace("_orig_mod.", "")
                 v = v.to(self.param_dtype)
 
-                self.state_dict_plans.append(TensorSpec.from_tensor(k, v))
+                self.state_dict_plans.append(
+                    TensorSpec.from_tensor(k, v, use_rdma=True)
+                )
 
         for generator in self.generators:
             await generator.set_state_dict_plans.call_one(self.state_dict_plans)
@@ -280,8 +282,6 @@ class Trainer(Actor):
         state_dict = self.trainer.actor.state_dict()
         state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
 
-        self.global_pg.group_start()
-
         for plan in self.state_dict_plans:
             name = plan.name
             tensor = state_dict[name]
@@ -289,10 +289,7 @@ class Trainer(Actor):
             if isinstance(tensor, DTensor):
                 tensor = tensor.to_local()
 
-            for generator_rank in self.generator_ranks:
-                self.global_pg.send(tensor, generator_rank + self.rank_offset)
-
-        self.global_pg.group_end()
+            plan.rdma_buffer.write_from(tensor.view(torch.uint8).flatten())
 
     @endpoint
     async def run(self):
