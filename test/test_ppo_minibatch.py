@@ -1,10 +1,12 @@
+import uuid
+
 import torch
 from torch.nn import functional as F
 
 from halite.projects.common.rollout import (
     RolloutGenerator,
     Handler,
-    Request,
+    Rollout,
     RewardRegistry,
 )
 from halite.projects.common.rollout_fn import Compose, ToTokenReward
@@ -13,6 +15,7 @@ from halite.projects.ppo.trainer import (
     PPOTrainer,
     compute_grpo_advantage,
 )
+from halite.projects.ppo.variants import PPOActorLoss
 from halite.transformers.infer.engine.engine import InferenceResult
 
 
@@ -23,12 +26,12 @@ class InferenceEngineMock:
     def infer_batch(self, requests):
         return [
             InferenceResult(
-                id=0,
+                id=requests[0].id,
                 input_ids=[1, 2, 3, 4, 5],
                 output_ids=[[6, 7, 8], [6, 7, 8, 9, 10], [1, 2]],
             ),
             InferenceResult(
-                id=1,
+                id=requests[1].id,
                 input_ids=[6, 7, 8],
                 output_ids=[[1, 2, 3, 4, 5], [6, 7], [8, 9, 10]],
             ),
@@ -110,17 +113,19 @@ if __name__ == "__main__":
 
     rollout = rollout_generator.generate(
         [
-            Request(
-                question1,
-                "math",
-                {"max_new_tokens": 512, "n": 4},
-                {"input_text": question1},
+            Rollout(
+                id=uuid.uuid4().hex,
+                input_ids=[1, 2, 3, 4, 5],
+                type="math",
+                sampling_params={"max_new_tokens": 512, "n": 4},
+                state={"input_text": question1},
             ),
-            Request(
-                question2,
-                "arithmetic",
-                {"max_new_tokens": 512, "n": 4},
-                {"input_text": question2},
+            Rollout(
+                id=uuid.uuid4().hex,
+                input_ids=[1, 2, 3, 4, 5],
+                type="math",
+                sampling_params={"max_new_tokens": 512, "n": 4},
+                state={"input_text": question1},
             ),
         ],
     )
@@ -129,6 +134,12 @@ if __name__ == "__main__":
     trainer = PPOTrainer(
         actor,
         compute_grpo_advantage,
+        PPOActorLoss(
+            clip_low=0.2,
+            clip_high=0.2,
+            pg_loss_agg="token-sum",
+            pg_loss_max_tokens=4096,
+        ),
         log_probs_batch_size=3,
     )
 
