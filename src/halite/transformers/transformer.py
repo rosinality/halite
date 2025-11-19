@@ -205,7 +205,7 @@ class TransformerDecoder(nn.Module, GenerationMixin, ModelMixin):
             out = pos_embed(attention_mask)
 
         else:
-            out = pos_embed(position_ids, query_length, device, dtype)
+            out = pos_embed(position_ids, query_length, None, device, dtype)
 
         return out
 

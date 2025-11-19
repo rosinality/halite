@@ -21,6 +21,7 @@ def parallelize(
     compile=False,
     compile_config=None,
     force_fsdp=False,
+    reshard_after_forward=True,
 ):
     if parallel_dims.tp_enabled:
         apply_tp(model, mesh["tp"], tensor_parallel_config)
@@ -44,7 +45,7 @@ def parallelize(
         else:
             dp_mesh = mesh["dp"]
 
-        apply_fsdp(model, dp_mesh, param_dtype, reduce_dtype)
+        apply_fsdp(model, dp_mesh, param_dtype, reduce_dtype, reshard_after_forward)
 
     elif parallel_dims.dp_replicate_enabled:
         apply_ddp(model, mesh["dp"], compile=compile)

@@ -78,7 +78,14 @@ class MultiModalEmbedding(nn.Module):
 
 class PatchEmbedding(nn.Module):
     def __init__(
-        self, in_dim, out_dim, patch_size, position_embedding=None, use_conv=False
+        self,
+        in_dim,
+        out_dim,
+        patch_size,
+        position_embedding=None,
+        use_conv=False,
+        use_bias=False,
+        patch_embedding_init=None,
     ):
         super().__init__()
 
@@ -89,15 +96,24 @@ class PatchEmbedding(nn.Module):
                 kernel_size=patch_size,
                 stride=patch_size,
                 padding="valid",
+                bias=use_bias,
             )
 
         else:
-            self.patch_embedding = nn.Linear(in_dim * (patch_size**2), out_dim)
+            self.patch_embedding = nn.Linear(
+                in_dim * (patch_size**2), out_dim, bias=use_bias
+            )
 
         self.position_embedding = position_embedding
 
         self.patch_size = patch_size
         self.use_conv = use_conv
+
+        self.patch_embedding_init = patch_embedding_init
+
+    def init_weights(self):
+        if self.patch_embedding_init is not None:
+            self.patch_embedding_init(self.patch_embedding.weight)
 
     def forward(self, images):
         if self.use_conv:

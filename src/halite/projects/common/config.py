@@ -212,6 +212,7 @@ class Training(Config):
     clip_grad_norm: float | None = None
     n_epochs: int = 1
     eval_step: int = 1000
+    seed: int = 42
 
     train_step_fn: Instance | None = None
     eval_step_fn: Instance | None = None
@@ -231,8 +232,8 @@ class Dataset(Config):
 
 
 class Data(Config):
-    train: Dataset | None = None
-    eval: Dataset | None = None
+    train: Dataset | Instance | None = None
+    eval: Dataset | Instance | None = None
     train_ratio: float = 1.0
     eval_ratio: float = 1.0
     preprocess: list[Instance] | None = None

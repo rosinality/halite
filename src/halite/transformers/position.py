@@ -1,5 +1,4 @@
 import math
-from operator import inv
 
 import torch
 from torch import nn
