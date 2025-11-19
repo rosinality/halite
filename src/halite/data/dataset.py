@@ -10,6 +10,12 @@ except ImportError:
     array_record = None
 
 try:
+    import bagz
+
+except ImportError:
+    bagz = None
+
+try:
     from ffrecord import FileReader
 
 except ImportError:
@@ -25,21 +31,31 @@ from halite.data.index_shuffle import index_shuffle
 @dataclasses.dataclass
 class FileInstruction:
     filename: str
-    skip: int
-    take: int
-    examples_in_shard: int
+    skip: int = 0
+    take: int | None = None
+    examples_in_shard: int | None = None
 
 
 class FFRecordDataSource:
     def __init__(self, file_instructions):
-        self.readers = [
-            FileReader(instruction.filename, check_data=False)
-            for instruction in file_instructions
-        ]
-        indices = [instruction.take for instruction in file_instructions]
+        self.readers = []
+        indices = []
+        
+        for instruction in file_instructions:
+            reader = self._build_reader(instruction.filename)
+            indice = instruction.take
+            if instruction.take is None:
+                indice = len(reader)
+                
+            self.readers.append(reader)
+            indices.append(indice)
+            
         self.cumsum = list(itertools.accumulate(indices))
         self.length = sum(indices)
         self.skips = [instruction.skip for instruction in file_instructions]
+
+    def _build_reader(self, filename):
+        return FileReader(filename, check_data=False)
 
     def __len__(self):
         return self.length
@@ -56,11 +72,18 @@ class FFRecordDataSource:
 
         sample_id += self.skips[reader_id]
 
-        return self.readers[reader_id].read_one(sample_id).tobytes()
+        return self._read(self.readers[reader_id], sample_id)
 
-    def __del__(self):
-        for reader in self.readers:
-            reader.close()
+    def _read(self, reader, index):
+        return reader.read_one(index).tobytes()
+
+
+class BagzDataSource(FFRecordDataSource):
+    def _build_reader(self, filename):
+        return bagz.Reader(filename)
+
+    def _read(self, reader, index):
+        return reader[index]
 
 
 def build_dataset_from_spec(spec, split="train", split_ratio=0):
@@ -107,6 +130,9 @@ def build_dataset_from_spec(spec, split="train", split_ratio=0):
 
         elif instructions[0].filename.endswith(".arrayrecord"):
             datasources[dataset] = array_record.ArrayRecordDataSource(instructions)
+
+        elif instructions[0].filename.endswith((".bag", ".bagz")):
+            datasources[dataset] = BagzDataSource(instructions)
 
         else:
             raise ValueError(f"Unsupported file extension: {instructions[0].filename}")

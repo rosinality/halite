@@ -2,7 +2,18 @@ import argparse
 import os
 import json
 
-from array_record.python.array_record_module import ArrayRecordWriter
+try:
+    from array_record.python.array_record_module import ArrayRecordWriter
+
+except ImportError:
+    ArrayRecordWriter = None
+
+try:
+    import bagz
+
+except ImportError:
+    bagz = None
+
 from datasets import load_dataset, DatasetDict
 import orjson
 from tqdm import tqdm
@@ -53,7 +64,7 @@ def pformat_dict(input):
 
 
 def write_arrayrecord(
-    dset, dataset_name, name, split, batch_size, n_shards, output_path
+    dset, dataset_name, name, split, batch_size, n_shards, output_path, format
 ):
     dataset_name = dataset_name.replace("/", "_")
 
@@ -69,6 +80,12 @@ def write_arrayrecord(
 
     dataset_conf = {}
 
+    if format == "arrayrecord":
+        writer_fn = lambda path: ArrayRecordWriter(path, "group_size:1")
+
+    elif format in {"bag", "bagz"}:
+        writer_fn = lambda path: bagz.Writer(path)
+
     for split in splits:
         split_conf = {
             "root": output_path,
@@ -77,16 +94,14 @@ def write_arrayrecord(
         }
 
         if name is None:
-            filename = f"{split}-{{i}}-of-{n_shards}.arrayrecord"
+            filename = f"{split}-{{i}}-of-{n_shards}.{format}"
 
         else:
-            filename = f"{name}-{split}-{{i}}-of-{n_shards}.arrayrecord"
+            filename = f"{name}-{split}-{{i}}-of-{n_shards}.{format}"
 
         shard_names = [filename.format(i=i + 1) for i in range(n_shards)]
         shard_writer = [
-            ArrayRecordWriter(
-                os.path.join(output_path, dataset_name, name), "group_size:1"
-            )
+            writer_fn(os.path.join(output_path, dataset_name, name))
             for name in shard_names
         ]
 
@@ -128,6 +143,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--n_shards", type=int, default=1)
     parser.add_argument("--trust_remote_code", action="store_true")
+    parser.add_argument("--format", type=str, default="arrayrecord")
     parser.add_argument("dataset", type=str)
 
     args = parser.parse_args()
@@ -163,6 +179,7 @@ if __name__ == "__main__":
             args.batch_size,
             args.n_shards,
             args.output,
+            args.format,
         )
 
         if dataset_conf is None:
