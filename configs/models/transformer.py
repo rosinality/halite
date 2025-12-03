@@ -18,22 +18,19 @@ from halite.transformers.feedforward import (
 )
 from halite.transformers.position import RotaryEmbedding, apply_rotary_emb
 from halite.transformers.transformer import TransformerDecoder
-from halite.transformers.infer.transformer import InferTransformerDecoder
-from halite.transformers.infer.block import InferTransformerEncoderBlock
-from halite.transformers.tokainfer.block import TokaInferTransformerEncoderBlock
-from halite.transformers.tokainfer.transformer import TokaInferTransformerDecoder
 
 try:
+    from halite.transformers.infer.transformer import InferTransformerDecoder
+    from halite.transformers.infer.block import InferTransformerEncoderBlock
+    from halite.transformers.tokainfer.block import TokaInferTransformerEncoderBlock
+    from halite.transformers.tokainfer.transformer import TokaInferTransformerDecoder
+
     from halite.transformers.infer.attention import (
         InferSelfAttention,
         InferSelfAttentionQKV,
         FlashInferAttention,
     )
 
-except ImportError:
-    pass
-
-try:
     from halite.transformers.tokainfer.attention import (
         TokaInferSelfAttention,
         TokaInferSelfAttentionQKV,

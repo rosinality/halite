@@ -409,8 +409,6 @@ class JiT(nn.Module):
         label_embed = self.label_embedding(labels)
         cond_embed = time_embed + label_embed
 
-        total_time = 0
-        n_blocks = 0
         for id, block in self.blocks.items():
             id = int(id)
 
@@ -425,16 +423,7 @@ class JiT(nn.Module):
             elif id >= self.in_context_start and self.in_context_rope is not None:
                 pos_emb = self.in_context_rope()
 
-            # torch.cuda.synchronize()
-            # start_time = perf_counter()
             out = block(out, cond_embed, pos_emb=pos_emb)
-            # torch.cuda.synchronize()
-            # end_time = perf_counter()
-            # total_time += end_time - start_time
-            # n_blocks += 1
-
-        # if dist.get_rank() == 0:
-        #     print(f"Average block time: {total_time / n_blocks}")
 
         if self.in_context_embed is not None:
             out = out[:, self.in_context_embed.n_tokens :]
@@ -443,3 +432,102 @@ class JiT(nn.Module):
             out = self.head(out, cond_embed)
 
         return out
+
+
+class EncoderJiT(nn.Module):
+    def __init__(
+        self,
+        encoder,
+        time_embedding,
+        label_embedding,
+        in_context_embed,
+        in_context_rope,
+        blocks=None,
+        head=None,
+        cond_start_id=0,
+    ):
+        super().__init__()
+
+        self.embedding = encoder.embedding
+
+        self.time_embedding = time_embedding
+        self.label_embedding = label_embedding
+
+        self.in_context_embed = in_context_embed
+        self.in_context_rope = in_context_rope
+
+        self.encoder = encoder
+
+        self.blocks = ModuleDict()
+        blocks = [] if blocks is None else blocks
+        for i, block in enumerate(blocks):
+            self.blocks[str(i)] = block
+
+        self.head = head
+
+        self.cond_start_id = cond_start_id
+
+    def init_weights(self, device):
+        def init_weight(module):
+            if hasattr(module, "init_weights"):
+                module.init_weights()
+
+        for child in (
+            self.time_embedding,
+            self.label_embedding,
+            self.in_context_embed,
+            self.in_context_rope,
+            self.blocks,
+            self.head,
+        ):
+            child.apply(init_weight)
+
+    def freeze_encoder(self):
+        self.encoder.requires_grad_(False)
+
+    def forward(self, input, times, labels):
+        out = self.encoder.embedding(input)
+
+        residual = None
+        attention_mask = None
+        pos_emb = None
+        use_cache = False
+
+        for _, block in self.encoder.blocks.items():
+            out, residual, _, _ = block(
+                out,
+                residual,
+                attention_mask,
+                pos_emb=pos_emb,
+                use_cache=use_cache,
+            )
+
+        time_embed = self.time_embedding(times)
+        label_embed = self.label_embedding(labels)
+        cond_embed = time_embed + label_embed
+
+        out = self.in_context_embed(out, cond_embed)
+
+        pos_emb = self.in_context_rope()
+        zero_cond = cond_embed * 0
+
+        for id, block in self.blocks.items():
+            id = int(id)
+
+            cond_input = zero_cond if id < self.cond_start_id else cond_embed
+            out = block(out, cond_input, pos_emb=pos_emb)
+
+        out = out[:, self.in_context_embed.n_tokens :]
+
+        if self.head is not None:
+            out = self.head(out, cond_embed)
+
+        return out
+
+
+def encoder_jit_block_iterator(model):
+    for i, block in model.encoder.blocks.items():
+        yield i, block, model.encoder.blocks
+
+    for i, block in model.blocks.items():
+        yield i, block, model.blocks

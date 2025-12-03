@@ -1,0 +1,99 @@
+from functools import partial
+
+from slickconf import call, field
+from torch import optim
+from torchvision import transforms
+
+from halite.optim import lr_scheduler
+from halite.transformers.parallelize import parallelize
+from halite.transformers.models.jit import encoder_jit_block_iterator
+from halite.projects.common.config import load_model
+from halite.projects.dit.dataset import CenterCrop, BagzDataset
+from halite.projects.dit.diffusion import Diffusion
+
+from ...models.encoder_jit import encoder_jit
+
+image_size = 256
+batch_size = 128 * 8
+lr = 5e-5 * batch_size / 256
+
+conf = field()
+
+conf.model = field()
+
+conf.data = field(
+    train=BagzDataset(
+        "/mnt/fr20tb/seonghyeon/ilsvrc2012_train.bag",
+        transform=transforms.Compose(
+            [
+                CenterCrop(image_size),
+                transforms.RandomHorizontalFlip(),
+                transforms.PILToTensor(),
+            ]
+        ),
+    )
+)
+
+conf.training = field(
+    train_batch_size=batch_size,
+    eval_batch_size=64,
+    n_epochs=600,
+    gradient_checkpointing=False,
+    optimizer=partial(optim.AdamW, lr=lr, betas=(0.9, 0.95), weight_decay=0),
+    scheduler=partial(
+        lr_scheduler.cycle_scheduler,
+        lr=lr,
+        initial_multiplier=1e-6,
+        final_multiplier=1,
+        warmup=5,
+        decay=("linear", "cos"),
+    ),
+    criterion=Diffusion(
+        input_shape=(3, image_size, image_size),
+        n_labels=1000,
+        guidance_interval=(0.1, 1.0),
+        guidance_scale=2.9,
+        noise_scale=1.0,
+        p_mean=-0.8,
+        p_std=0.8,
+    ),
+    ema=0.9996,
+    freeze_encoder=False,
+)
+
+conf.output = field(
+    log_step=10, output_dir="/mnt/ddn/jit", sampling_step=1000, save_step=10000
+)
+
+
+def encoder_jit_l_16():
+    model_path = "/mnt/fr20tb/seonghyeon/halite/siglip2_large_patch16_256"
+
+    conf.model = load_model(model_path)
+    conf.model.wrapper = call[encoder_jit](
+        image_size=256,
+        patch_size=16,
+        n_labels=1000,
+        dim=1024,
+        patch_dim=128,
+        n_heads=16,
+        head_dim=1024 // 16,
+        n_layers=6,
+        intermediate_size=int(4096 * 2 / 3),
+        in_context_len=32,
+        qk_norm=True,
+        cond_start_id=4,
+    )
+    conf.model.parallelize = partial(
+        parallelize,
+        param_dtype="bfloat16",
+        reduce_dtype="float32",
+        tensor_parallel_config={"enable_async_tp": True},
+        activation_checkpointing=False,
+        activation_checkpointing_config={"mode": "full", "selective": "op"},
+        compile=True,
+        reshard_after_forward=True,
+        block_iterator=encoder_jit_block_iterator,
+    )
+
+    return conf

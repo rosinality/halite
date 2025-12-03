@@ -167,13 +167,13 @@ class EquilibriumMatchingJiT(Diffusion):
         return loss
 
     def _forward_fn(self, fn, z, t, labels, **forward_kwargs):
-        c_t = self.get_c_t(t.clamp_max(1 - 1.5e-4))
+        c_t = self.get_c_t(t)
 
         x_cond = fn(z, t.flatten() * 0, labels, **forward_kwargs).to(torch.float32)
-        v_cond = (x_cond / c_t - z) / (1 - t).clamp_min(self.eps_t)
+        v_cond = (x_cond - c_t * z) / (1 - t).clamp_min(self.eps_t)
 
         x_uncond = fn(z, t.flatten() * 0, torch.full_like(labels, self.n_labels))
-        v_uncond = (x_uncond / c_t - z) / (1 - t).clamp_min(self.eps_t)
+        v_uncond = (x_uncond - c_t * z) / (1 - t).clamp_min(self.eps_t)
 
         low, high = self.guidance_interval
         interval_mask = (t < high) & ((low == 0) | (t > low))
