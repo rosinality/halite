@@ -27,6 +27,7 @@ def copy_if_exists(src, dst, filename):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--conf", type=str)
+    parser.add_argument("--conf_name", type=str, default=None)
     parser.add_argument("--tokenizer_type", type=str, default="sentencepiece")
     parser.add_argument("--tokenizer", type=str, default=None)
     parser.add_argument("--out", type=str)
@@ -34,7 +35,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    conf = load_config(args.conf)
+    conf = load_config(args.conf, config_name=args.conf_name)
 
     checkpoint_files = sorted(glob(args.checkpoint_pattern))
     logger.info(f"loading {len(checkpoint_files)} checkpoints")

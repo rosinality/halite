@@ -7,7 +7,7 @@ class TransformerConfig(BaseModel):
     n_layers: StrictInt
     n_heads: StrictInt
     head_dim: StrictInt
-    n_key_value_heads: StrictInt
+    n_key_value_heads: StrictInt | None = None
     intermediate_size: StrictInt
     context_len: StrictInt
 
