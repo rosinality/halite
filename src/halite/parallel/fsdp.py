@@ -5,7 +5,14 @@ from torch.distributed._composable.replicate import replicate
 from halite.utils import get_torch_dtype
 
 
-def apply_fsdp(model, dp_mesh, param_dtype, reduce_dtype, reshard_after_forward=True):
+def apply_fsdp(
+    model,
+    dp_mesh,
+    param_dtype,
+    reduce_dtype,
+    reshard_after_forward=True,
+    block_iterator=None,
+):
     if param_dtype is not None:
         param_dtype = get_torch_dtype(param_dtype)
 
@@ -16,7 +23,13 @@ def apply_fsdp(model, dp_mesh, param_dtype, reduce_dtype, reshard_after_forward=
         param_dtype=param_dtype, reduce_dtype=reduce_dtype
     )
 
-    for i, block in model.blocks.items():
+    if block_iterator is None:
+        block_iterator = [(i, block, None) for i, block in model.blocks.items()]
+
+    else:
+        block_iterator = block_iterator(model)
+
+    for i, block, _ in block_iterator:
         # reshard_after_forward = int(i) < len(model.blocks) - 1
         layer_reshard_after_forward = False
         if reshard_after_forward:
