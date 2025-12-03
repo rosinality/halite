@@ -20,6 +20,7 @@ def parallelize(
     activation_checkpointing_config=None,
     compile=False,
     compile_config=None,
+    block_iterator=None,
     force_fsdp=False,
     reshard_after_forward=True,
 ):
@@ -30,7 +31,7 @@ def parallelize(
         apply_activation_checkpointing(model, activation_checkpointing_config)
 
     if compile:
-        apply_compile(model, compile_config)
+        apply_compile(model, compile_config, block_iterator)
 
     if parallel_dims.dp_shard_enabled or (
         parallel_dims.dp_replicate_enabled and force_fsdp
@@ -45,7 +46,14 @@ def parallelize(
         else:
             dp_mesh = mesh["dp"]
 
-        apply_fsdp(model, dp_mesh, param_dtype, reduce_dtype, reshard_after_forward)
+        apply_fsdp(
+            model,
+            dp_mesh,
+            param_dtype,
+            reduce_dtype,
+            reshard_after_forward,
+            block_iterator,
+        )
 
     elif parallel_dims.dp_replicate_enabled:
         apply_ddp(model, mesh["dp"], compile=compile)
@@ -134,15 +142,23 @@ def apply_tp(model, tp_mesh, config):
         enable_symm_mem_for_group(tp_mesh.get_group().group_name)
 
 
-def apply_compile(model, config):
+def apply_compile(model, config, block_iterator=None):
     config = {} if config is None else config
 
     if "fullgraph" not in config:
         config["fullgraph"] = True
 
-    for i, block in model.blocks.named_children():
+    if block_iterator is None:
+        block_iterator = [
+            (i, block, model.blocks) for i, block in model.blocks.named_children()
+        ]
+
+    else:
+        block_iterator = block_iterator(model)
+
+    for i, block, module in block_iterator:
         block = torch.compile(block, **config)
-        model.blocks.register_module(i, block)
+        module.register_module(i, block)
 
 
 def get_parallelize_plan(model, config):
