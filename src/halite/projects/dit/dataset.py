@@ -1,5 +1,8 @@
 import functools
+import pickle
+import io
 
+import bagz
 import numpy as np
 from PIL import Image
 from torchvision import datasets
@@ -43,3 +46,22 @@ class CenterCrop:
 
     def __call__(self, img):
         return center_crop_arr(img, self.image_size)
+
+
+class BagzDataset:
+    def __init__(self, data_path: str, transform=None):
+        self._reader = bagz.Reader(data_path)
+        self.transform = transform
+
+    def __len__(self):
+        return len(self._reader)
+
+    def __getitem__(self, index):
+        record = pickle.loads(self._reader[index])
+        image = Image.open(io.BytesIO(record["image"])).convert("RGB")
+
+        if self.transform is not None:
+            image = self.transform(image)
+
+        return image, record["class_id"]
+

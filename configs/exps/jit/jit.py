@@ -6,7 +6,7 @@ from torchvision import transforms
 
 from halite.optim import lr_scheduler
 from halite.transformers.parallelize import parallelize
-from halite.projects.dit.dataset import CenterCrop, ImageFolder
+from halite.projects.dit.dataset import CenterCrop, BagzDataset
 from halite.projects.dit.diffusion import Diffusion, EquilibriumMatchingJiT
 
 from ...models.jit import jit
@@ -31,8 +31,8 @@ conf.model = field(
 )
 
 conf.data = field(
-    train=ImageFolder(
-        "/mnt/ddn/ilsvrc2012",
+    train=BagzDataset(
+        "/mnt/fr20tb/seonghyeon/ilsvrc2012_train.bag",
         transform=transforms.Compose(
             [
                 CenterCrop(image_size),
@@ -69,7 +69,7 @@ conf.training = field(
     ema=0.9996,
 )
 
-conf.output = field(log_step=10, output_dir="/mnt/ddn/jit", sampling_step=1000)
+conf.output = field(log_step=10, output_dir="/mnt/ddn/jit", sampling_step=1000, save_step=10000)
 
 
 def jit_b_16():
