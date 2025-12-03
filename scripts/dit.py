@@ -1,7 +1,10 @@
+import os
+
 import numpy as np
 import torch
 from torch import distributed as dist
 from torch.distributed.fsdp import FSDPModule
+from torch.distributed.tensor import DTensor
 from torch.utils.data import DataLoader, DistributedSampler
 from torchvision.utils import make_grid
 from slickconf import instantiate, load_arg_config, summarize
@@ -12,7 +15,7 @@ try:
 except ImportError:
     wandb = None
 
-from halite.distributed import all_reduce_mean
+from halite.distributed import all_reduce_mean, load_checkpoint
 from halite.logging import get_logger
 from halite.parallel import ParallelDims
 from halite.projects.dit.config import DiTConfig
@@ -29,6 +32,9 @@ def update_ema(ema_model, model, decay):
     model_params = dict(model.named_parameters())
 
     for name, param in model_params.items():
+        if not param.requires_grad:
+            continue
+
         ema_params[name].detach().mul_(decay).add_(param.detach(), alpha=1 - decay)
 
 
@@ -45,6 +51,7 @@ def train(
     global_step,
     parallel_dims,
     logger,
+    output_path,
 ):
     is_train = model.training
     model.train()
@@ -109,6 +116,24 @@ def train(
             if parallel_dims.is_primary and wandb is not None:
                 wandb.log({"samples": wandb.Image(samples_batch)}, step=global_step)
 
+        if global_step % conf.output.save_step == 0:
+            full_sd = {}
+            for name, param in model_ema.state_dict().items():
+                if isinstance(param, DTensor):
+                    param = param.full_tensor()
+
+                if parallel_dims.is_primary:
+                    full_sd[name] = param.to("cpu")
+
+                else:
+                    del param
+
+            if parallel_dims.is_primary:
+                torch.save(
+                    full_sd,
+                    os.path.join(output_path, f"ema-{str(global_step).zfill(7)}.pt"),
+                )
+
         global_step += 1
 
     model.train(is_train)
@@ -127,16 +152,22 @@ def apply_compile(model, config):
         model.blocks.register_module(i, block)
 
 
-def build_model(model, wrapper, parallel_dims, device):
+def build_model(model_conf, parallel_dims, device):
     with torch.device("meta"):
-        model = instantiate(model)
-
-    if wrapper is not None:
-        model = instantiate(wrapper)(
-            model=model, mesh=parallel_dims.mesh, parallel_dims=parallel_dims
-        )
+        model = instantiate(model_conf.model)
 
     model.to_empty(device=device)
+
+    if model_conf.checkpoint_path is not None:
+        load_checkpoint(model_conf.checkpoint_path, model_parts=model)
+
+    if model_conf.wrapper is not None:
+        model = instantiate(model_conf.wrapper)(model)
+
+    if model_conf.parallelize is not None:
+        model = instantiate(model_conf.parallelize)(
+            model=model, mesh=parallel_dims.mesh, parallel_dims=parallel_dims
+        )
 
     return model
 
@@ -184,19 +215,22 @@ def main():
 
     logger.info("building model")
 
-    model = build_model(conf.model.model, conf.model.wrapper, pdims, device)
+    model = build_model(conf.model, pdims, device)
     model.init_weights(device)
 
     # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[mesh["dp"].get_local_rank()])
     logger.info(str(model))
 
-    model_ema = build_model(conf.model.model, conf.model.wrapper, pdims, device)
+    model_ema = build_model(conf.model, pdims, device)
     model_ema.eval()
     model_ema.load_state_dict(model.state_dict())
 
     if conf.training.gradient_checkpointing:
         logger.info("use gradient checkpointing")
         model.gradient_checkpointing_enable(1)
+
+    if conf.training.freeze_encoder:
+        model.freeze_encoder()
 
     criterion = instantiate(conf.training.criterion)
     optimizer = instantiate(conf.training.optimizer)(
@@ -234,6 +268,11 @@ def main():
 
     global_step = 0
 
+    output_path = None
+    if pdims.is_primary:
+        output_path = os.path.join(conf.output.output_dir, wandb.run.name)
+        os.makedirs(output_path, exist_ok=True)
+
     for epoch in range(conf.training.n_epochs):
         logger.info(f"epoch {epoch}")
 
@@ -252,6 +291,7 @@ def main():
             global_step,
             pdims,
             logger,
+            output_path,
         )
 
     # dcp.save(
